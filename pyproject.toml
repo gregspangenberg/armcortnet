@@ -6,9 +6,12 @@ authors = [
     {name = "gspangenberg",email = "gspangen@uwo.ca"}
 ]
 readme = "README.md"
-requires-python = ">=3.12"
-dependencies = [
-]
+
+[tool.poetry.dependencies]
+python = ">=3.11"
+armcrop = ">=0.5.6"
+nnunetv2 = ">=2.5"
+
 
 [tool.poetry]
 packages = [{include = "armcortnet", from = "src"}]
