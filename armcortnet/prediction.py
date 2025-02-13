@@ -16,10 +16,11 @@ import nnunetv2.inference.predict_from_raw_data
 
 
 class Net:
-    def __init__(self, bone_type: str, save_obb_dir: str | None = None):
+    # def __init__(self, bone_type: str, save_obb_dir: str | None = None):
+    def __init__(self, bone_type: str):
 
         self.bone_type = bone_type
-        self._save_obb_dir = save_obb_dir
+        # self._save_obb_dir = save_obb_dir
         self._model_path = self._get_nnunet_model(bone_type)
         self._nnunet_predictor = nnunetv2.inference.predict_from_raw_data.nnUNetPredictor(
             tile_step_size=0.5,
@@ -71,7 +72,7 @@ class Net:
         props = []
         for v in vols_sitk:
             vols.append(np.expand_dims(sitk.GetArrayFromImage(v), 0).astype(np.float32))
-
+            print(v.GetSize())
             props.append(
                 {
                     "sitk_stuff": {
@@ -87,24 +88,66 @@ class Net:
             )
         return vols, props
 
-    def predict(self, vol_path):
+    def _convert_nnunet_to_sitk(self, result_arr, vols_sitk):
+        result_sitk = []
+        # for each volume in the batch
+        for i, r in enumerate(result_arr):
+            r_sitk = sitk.GetImageFromArray(r)
+            r_sitk.CopyInformation(vols_sitk[i])
+            result_sitk.append(r_sitk)
+
+        return result_sitk
+
+    def predict(self, vol_path: str | pathlib.Path, output_seg_path: str | pathlib.Path):
+
+        # memory could be better managed by deleting objects after they are used
         if self.bone_type == "scapula":
             vols_sitk = self._obb(vol_path).scapula([0.5, 0.5, 0.5])
         elif self.bone_type == "humerus":
-            vols_sitk = self._obb(vol_path).humerus([0.5, 0.5, 0.5])
+            # vols_sitk = self._obb(vol_path).humerus([0.5, 0.5, 0.5])
+            vols_sitk = [
+                sitk.ReadImage(
+                    "/home/greg/projects/segment/stage2_net_training/database/vol_obb/humerus/AAW-0.nrrd"
+                )
+            ]
 
         vols_nnunet, props_nnunet = self._convert_sitk_to_nnunet(vols_sitk)
 
-        a = self._nnunet_predictor.predict_from_list_of_npy_arrays(
+        result_arr = self._nnunet_predictor.predict_from_list_of_npy_arrays(
             vols_nnunet,
             None,
             props_nnunet,
             None,
             num_processes=len(vols_nnunet),
         )
-        return a
+        # convert the result back to sitk
+        result_sitk = self._convert_nnunet_to_sitk(result_arr, vols_sitk)
+
+        # in the futre we can switch armcrop to take an sitk object instead of a path
+        for r in result_sitk:
+            sitk.WriteImage(r, output_seg_path)
+
+            if self.bone_type == "scapula":
+                Unaligner = armcrop.UnalignOBBSegmentation(
+                    vol_path,
+                    thin_regions={2: (2, 3)},
+                    face_connectivity_regions=[2],
+                    face_connectivity_repeats=2,
+                )
+            elif self.bone_type == "humerus":
+                Unaligner = armcrop.UnalignOBBSegmentation(vol_path, thin_regions={2: (2, 3)})
+
+            # perform the unalignment and save the result
+            r_unalign = Unaligner(output_seg_path)
+            sitk.WriteImage(r_unalign, output_seg_path)
+
+            # we should add in a step where we apply shell thickness
+
+            return r_unalign
 
 
 if __name__ == "__main__":
-    res = Net("humerus").predict("/mnt/slowdata/arthritic-clinical-half-arm/AAW/AAW.nrrd")
-    print(np.unique(res, return_counts=True))
+    res = Net("humerus").predict(
+        "/mnt/slowdata/arthritic-clinical-half-arm/AAW/AAW.nrrd",
+        "/home/greg/projects/armcortnet/armcortnet/AAW.seg.nrrd",
+    )
