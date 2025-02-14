@@ -98,6 +98,24 @@ class Net:
 
         return result_sitk
 
+    def post_process(self, seg_sitk: sitk.Image):
+        # Create binary mask of classes 2-4 which is the entire bone
+        b_mask = sitk.BinaryThreshold(
+            seg_sitk, lowerThreshold=2, upperThreshold=4, insideValue=1, outsideValue=0
+        )
+        # Get contour of the bone binary mask
+        contour = sitk.BinaryContour(
+            b_mask, fullyConnected=True, backgroundValue=0, foregroundValue=1
+        )
+
+        # Get locations where contour=1 AND class of seg_stik = 3
+        contour_on_class3 = sitk.Multiply(contour, sitk.Equal(seg_sitk, 3))
+
+        # Subtract contour from class 3 to make it class 2
+        result = sitk.Subtract(seg_sitk, contour_on_class3)  # Turn class 3 to 2
+
+        return result
+
     def predict(self, vol_path: str | pathlib.Path, output_seg_path: str | pathlib.Path):
 
         # memory could be better managed by deleting objects after they are used
@@ -139,15 +157,19 @@ class Net:
 
             # perform the unalignment and save the result
             r_unalign = Unaligner(output_seg_path)
+
+            # perform post processing on the unaligned segmentation
+            r_unalign = self.post_process(r_unalign)
+
             sitk.WriteImage(r_unalign, output_seg_path)
 
-            # we should add in a step where we apply shell thickness
+            # we should add in a step where we apply post processing like shell thickness
 
             return r_unalign
 
 
 if __name__ == "__main__":
-    res = Net("humerus").predict(
+    res = Net("scapula").predict(
         "/mnt/slowdata/arthritic-clinical-half-arm/AAW/AAW.nrrd",
         "/home/greg/projects/armcortnet/armcortnet/AAW.seg.nrrd",
     )
