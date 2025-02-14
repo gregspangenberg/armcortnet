@@ -3,7 +3,7 @@
 Armcortnet provides automatic segmentation of the humerus and scapula from CT scans. The deep learning model is trained to also segment out the cortical and trabecular subregions from each bone as well.
 
 
-The deep learning pipeple consists of using armcrop to crop to an oriented bounding box around each humerus or scapula in the image and then a neural network based traine from the nnUNet framework segments that cropped volume. The segmetnation is then transformed back to the original coordinate system, post-processed and finally saved as a .seg.nrrd file.
+The deep learning pipeple consists of using [armcrop](https://pypi.org/project/armcrop/) to crop to an oriented bounding box around each humerus or scapula in the image and then a neural network based traine from the nnUNet framework segments that cropped volume. The segmetnation is then transformed back to the original coordinate system, post-processed and finally saved as a .seg.nrrd file.
 
 ## Installation
 
