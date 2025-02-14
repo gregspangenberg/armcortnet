@@ -1,3 +1,4 @@
 armcortnet/models/
 *.ipynb
 *.seg.nrrd
+dist/
