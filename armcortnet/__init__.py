@@ -1,1 +1,1 @@
-from armcortnet import Net
+from armcortnet.prediction import Net
