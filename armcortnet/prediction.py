@@ -4,6 +4,7 @@ import huggingface_hub
 import numpy as np
 import SimpleITK as sitk
 import armcrop
+from typing import List
 
 # make nnunet stop spitting out warnings from environment variables the author declared
 os.environ["nnUNet_raw"] = "None"
@@ -98,7 +99,7 @@ class Net:
 
         return result_sitk
 
-    def post_process(self, seg_sitk: sitk.Image):
+    def post_process(self, seg_sitk: sitk.Image) -> sitk.Image:
         # Create binary mask of classes 2-4 which is the entire bone
         b_mask = sitk.BinaryThreshold(
             seg_sitk, lowerThreshold=2, upperThreshold=4, insideValue=1, outsideValue=0
@@ -116,7 +117,7 @@ class Net:
 
         return result
 
-    def predict(self, vol_path: str | pathlib.Path, output_seg_path: str | pathlib.Path):
+    def predict(self, vol_path: str | pathlib.Path, post_process=True) -> List[sitk.Image]:
 
         # memory could be better managed by deleting objects after they are used
         if self.bone_type == "scapula":
@@ -142,8 +143,10 @@ class Net:
         result_sitk = self._convert_nnunet_to_sitk(result_arr, vols_sitk)
 
         # in the futre we can switch armcrop to take an sitk object instead of a path
+        output_segs = []
+        tempname = "temp.seg.nrrd"
         for r in result_sitk:
-            sitk.WriteImage(r, output_seg_path)
+            sitk.WriteImage(r,tempname, useCompression=True)
 
             if self.bone_type == "scapula":
                 Unaligner = armcrop.UnalignOBBSegmentation(
@@ -155,21 +158,23 @@ class Net:
             elif self.bone_type == "humerus":
                 Unaligner = armcrop.UnalignOBBSegmentation(vol_path, thin_regions={2: (2, 3)})
 
-            # perform the unalignment and save the result
-            r_unalign = Unaligner(output_seg_path)
+            # perform the unalignment
+            r_unalign = Unaligner(tempname)
 
-            # perform post processing on the unaligned segmentation
-            r_unalign = self.post_process(r_unalign)
+            if post_process:
+                # perform post processing on the unaligned segmentation
+                r_unalign = self.post_process(r_unalign)
 
-            sitk.WriteImage(r_unalign, output_seg_path)
+            output_segs.append(r_unalign) # append the segmentation in og csys
+            pathlib.Path(tempname).unlink() # delete the temp file
 
-            # we should add in a step where we apply post processing like shell thickness
-
-            return r_unalign
+        return output_segs
 
 
 if __name__ == "__main__":
-    res = Net("scapula").predict(
+    scapula_segmentations = Net("scapula").predict(
         "/mnt/slowdata/arthritic-clinical-half-arm/AAW/AAW.nrrd",
-        "/home/greg/projects/armcortnet/armcortnet/AAW.seg.nrrd",
     )
+    print(scapula_segmentations)
+    for i, s in enumerate(scapula_segmentations):
+        sitk.WriteImage(s, f"AAW_scapula_{i}.seg.nrrd", useCompression=True)

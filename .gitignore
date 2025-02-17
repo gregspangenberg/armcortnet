@@ -1,4 +1,6 @@
 armcortnet/models/
 *.ipynb
 *.seg.nrrd
+*.pyc
 dist/
+*gs-inf.py

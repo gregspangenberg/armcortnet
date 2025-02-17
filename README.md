@@ -6,24 +6,32 @@ Armcortnet provides automatic segmentation of the humerus and scapula from CT sc
 The deep learning pipeple consists of using [armcrop](https://pypi.org/project/armcrop/) to crop to an oriented bounding box around each humerus or scapula in the image and then a neural network based traine from the nnUNet framework segments that cropped volume. The segmetnation is then transformed back to the original coordinate system, post-processed and finally saved as a .seg.nrrd file.
 
 ## Installation
+Please install pytorch first before installing armcortnet. You can learn about installing pytorch from the official website [here](https://pytorch.org/get-started/locally/).
 
+Then install armcortnet using pip:
 ```bash
 pip install armcortnet
 ```
+For faster oriented bounding box cropping you can replace onnxruntime with onnxruntime-gpu.
 
 ## Usage
 
 ```python
 from armcortnet import Net
+import SimpleITK as sitk
 
-# Initialize segmentation model
+# initialize the segmentation model
 model = Net(bone_type="scapula")  # or "humerus"
 
-# Perform segmentation
-model.predict(
+# perform segmentation prediction on a CT volume
+pred_segmentations = model.predict(
     vol_path="path/to/input/ct.nrrd",
-    output_seg_path="path/to/output/segmentation.seg.nrrd"
 )
+# output is a list of SimpleITK images, one for each bone_type detected in the CT
+for i, pred_seg in enumerate(pred_segmentations):
+    # write each of the segmentations to the disk
+    sitk.WriteImage(pred_seg, f"scapula-{i}.seg.nrrd")
+
 ```
 
 ## Output Labels
