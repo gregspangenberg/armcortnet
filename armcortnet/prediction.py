@@ -122,9 +122,7 @@ class Net:
     def predict(
         self, vol_path: str | pathlib.Path, post_process=True
     ) -> List[sitk.Image]:
-        print(
-            f"initalized {self._nnunet_predictor}, {self._nnunet_predictor.dataset_json}"
-        )
+
         # memory could be better managed by deleting objects after they are used
         if self.bone_type == "scapula":
             vols_sitk = self._obb(vol_path).scapula([0.5, 0.5, 0.5])
