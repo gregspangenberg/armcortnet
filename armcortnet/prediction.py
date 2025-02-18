@@ -118,36 +118,22 @@ class Net:
         return result
 
     def predict(self, vol_path: str | pathlib.Path, post_process=True) -> List[sitk.Image]:
-
+        print(f"initalized {self._nnunet_predictor}, {self._nnunet_predictor.dataset_json}")
         # memory could be better managed by deleting objects after they are used
         if self.bone_type == "scapula":
             vols_sitk = self._obb(vol_path).scapula([0.5, 0.5, 0.5])
         elif self.bone_type == "humerus":
-            # vols_sitk = self._obb(vol_path).humerus([0.5, 0.5, 0.5])
-            vols_sitk = [
-                sitk.ReadImage(
-                    "/home/greg/projects/segment/stage2_net_training/database/vol_obb/humerus/AAW-0.nrrd"
-                )
-            ]
+            vols_sitk = self._obb(vol_path).humerus([0.5, 0.5, 0.5])
 
-        vols_nnunet, props_nnunet = self._convert_sitk_to_nnunet(vols_sitk)
-
-        result_arr = self._nnunet_predictor.predict_from_list_of_npy_arrays(
-            vols_nnunet,
-            None,
-            props_nnunet,
-            None,
-            num_processes=len(vols_nnunet),
-        )
-        # convert the result back to sitk
-        result_sitk = self._convert_nnunet_to_sitk(result_arr, vols_sitk)
-
-        # in the futre we can switch armcrop to take an sitk object instead of a path
         output_segs = []
-        tempname = "temp.seg.nrrd"
-        for r in result_sitk:
-            sitk.WriteImage(r,tempname, useCompression=True)
-
+        vols, props = self._convert_sitk_to_nnunet(vols_sitk)
+        for i in range(len(vols_sitk)):
+            r = self._nnunet_predictor.predict_single_npy_array(
+                vols[i],
+                props[i],
+            )
+            r = sitk.GetImageFromArray(r)
+            r.CopyInformation(vols_sitk[i])
             if self.bone_type == "scapula":
                 Unaligner = armcrop.UnalignOBBSegmentation(
                     vol_path,
@@ -159,14 +145,13 @@ class Net:
                 Unaligner = armcrop.UnalignOBBSegmentation(vol_path, thin_regions={2: (2, 3)})
 
             # perform the unalignment
-            r_unalign = Unaligner(tempname)
+            r_unalign = Unaligner(r)
 
             if post_process:
                 # perform post processing on the unaligned segmentation
                 r_unalign = self.post_process(r_unalign)
 
             output_segs.append(r_unalign) # append the segmentation in og csys
-            pathlib.Path(tempname).unlink() # delete the temp file
 
         return output_segs
 
