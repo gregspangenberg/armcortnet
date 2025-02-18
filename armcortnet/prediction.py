@@ -125,9 +125,13 @@ class Net:
 
         # memory could be better managed by deleting objects after they are used
         if self.bone_type == "scapula":
-            vols_sitk = self._obb(vol_path).scapula([0.5, 0.5, 0.5])
+            vols_sitk = self._obb(vol_path).scapula(
+                [0.5, 0.5, 0.5], xy_padding=20, z_padding=20
+            )
         elif self.bone_type == "humerus":
-            vols_sitk = self._obb(vol_path).humerus([0.5, 0.5, 0.5])
+            vols_sitk = self._obb(vol_path).humerus(
+                [0.5, 0.5, 0.5], xy_padding=10, z_padding=30
+            )
 
         output_segs = []
         vols, props = self._convert_sitk_to_nnunet(vols_sitk)
