@@ -23,12 +23,14 @@ class Net:
         self.bone_type = bone_type
         # self._save_obb_dir = save_obb_dir
         self._model_path = self._get_nnunet_model(bone_type)
-        self._nnunet_predictor = nnunetv2.inference.predict_from_raw_data.nnUNetPredictor(
-            tile_step_size=0.5,
-            use_gaussian=True,
-            use_mirroring=True,
-            verbose=False,
-            verbose_preprocessing=False,
+        self._nnunet_predictor = (
+            nnunetv2.inference.predict_from_raw_data.nnUNetPredictor(
+                tile_step_size=0.5,
+                use_gaussian=True,
+                use_mirroring=True,
+                verbose=False,
+                verbose_preprocessing=False,
+            )
         )
         if self.bone_type == "scapula":
             fold = (1,)
@@ -117,8 +119,12 @@ class Net:
 
         return result
 
-    def predict(self, vol_path: str | pathlib.Path, post_process=True) -> List[sitk.Image]:
-        print(f"initalized {self._nnunet_predictor}, {self._nnunet_predictor.dataset_json}")
+    def predict(
+        self, vol_path: str | pathlib.Path, post_process=True
+    ) -> List[sitk.Image]:
+        print(
+            f"initalized {self._nnunet_predictor}, {self._nnunet_predictor.dataset_json}"
+        )
         # memory could be better managed by deleting objects after they are used
         if self.bone_type == "scapula":
             vols_sitk = self._obb(vol_path).scapula([0.5, 0.5, 0.5])
@@ -142,7 +148,9 @@ class Net:
                     face_connectivity_repeats=2,
                 )
             elif self.bone_type == "humerus":
-                Unaligner = armcrop.UnalignOBBSegmentation(vol_path, thin_regions={2: (2, 3)})
+                Unaligner = armcrop.UnalignOBBSegmentation(
+                    vol_path, thin_regions={2: (2, 3)}
+                )
 
             # perform the unalignment
             r_unalign = Unaligner(r)
@@ -151,7 +159,7 @@ class Net:
                 # perform post processing on the unaligned segmentation
                 r_unalign = self.post_process(r_unalign)
 
-            output_segs.append(r_unalign) # append the segmentation in og csys
+            output_segs.append(r_unalign)  # append the segmentation in og csys
 
         return output_segs
 

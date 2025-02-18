@@ -3,4 +3,5 @@ armcortnet/models/
 *.seg.nrrd
 *.pyc
 dist/
+outputs/
 *gs-inf.py
