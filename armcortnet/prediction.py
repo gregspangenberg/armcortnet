@@ -67,7 +67,13 @@ class Net:
     def _obb(self, vol_path):
         # this could be spedup if armcrop was modified to load its model once not every time it
         # recieves a  new volume
-        return armcrop.OBBCrop2Bone(vol_path)
+        # we default to a lower confidence threshold as we care more about complete capture
+        # of the bone than an accurate bounding box
+        return armcrop.OBBCrop2Bone(
+            vol_path,
+            confidence_threshold=0.3,
+            iou_supress_threshold=0.4,
+        )
 
     def _convert_sitk_to_nnunet(self, vols_sitk: list):
         # this needs some work
