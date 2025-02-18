@@ -1,4 +1,7 @@
-# armcortnet
+# *armcortnet*
+[![PyPI Latest Release](https://img.shields.io/pypi/v/armcortnet.svg)](https://pypi.org/project/armcortnet)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+
 
 Armcortnet provides automatic segmentation of the humerus and scapula from CT scans. The deep learning model is trained to also segment out the cortical and trabecular subregions from each bone as well.
 
