@@ -106,6 +106,14 @@ class Net:
         b_mask = sitk.BinaryThreshold(
             seg_sitk, lowerThreshold=2, upperThreshold=4, insideValue=1, outsideValue=0
         )
+        # get largest connected component
+        cc = sitk.RelabelComponent(
+            sitk.ConnectedComponent(b_mask),
+            sortByObjectSize=True,
+            minimumObjectSize=100,
+        )
+        b_mask = cc == 1
+
         # Get contour of the bone binary mask
         contour = sitk.BinaryContour(
             b_mask, fullyConnected=True, backgroundValue=0, foregroundValue=1
@@ -126,7 +134,11 @@ class Net:
         # memory could be better managed by deleting objects after they are used
         if self.bone_type == "scapula":
             vols_sitk = self._obb(vol_path).scapula(
-                [0.5, 0.5, 0.5], xy_padding=20, z_padding=20
+                [0.5, 0.5, 0.5],
+                xy_padding=10,
+                z_padding=20,
+                z_iou_interval=80,
+                z_length_min=80,
             )
         elif self.bone_type == "humerus":
             vols_sitk = self._obb(vol_path).humerus(
