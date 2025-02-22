@@ -16,6 +16,7 @@ import nnunetv2.inference
 import nnunetv2.inference.predict_from_raw_data
 
 
+# fix memory issues
 class Net:
     # def __init__(self, bone_type: str, save_obb_dir: str | None = None):
     def __init__(self, bone_type: str):
@@ -27,7 +28,7 @@ class Net:
             nnunetv2.inference.predict_from_raw_data.nnUNetPredictor(
                 tile_step_size=0.5,
                 use_gaussian=True,
-                use_mirroring=True,
+                use_mirroring=False,
                 verbose=False,
                 verbose_preprocessing=False,
             )
@@ -137,9 +138,9 @@ class Net:
         self, vol_path: str | pathlib.Path, post_process=True
     ) -> List[sitk.Image]:
 
-        # memory could be better managed by deleting objects after they are used
+        vol_input = sitk.ReadImage(str(vol_path))
         if self.bone_type == "scapula":
-            vols_sitk = self._obb(vol_path).scapula(
+            vols_obb = self._obb(vol_input).scapula(
                 [0.5, 0.5, 0.5],
                 xy_padding=10,
                 z_padding=20,
@@ -147,33 +148,34 @@ class Net:
                 z_length_min=80,
             )
         elif self.bone_type == "humerus":
-            vols_sitk = self._obb(vol_path).humerus(
+            vols_obb = self._obb(vol_input).humerus(
                 [0.5, 0.5, 0.5], xy_padding=10, z_padding=30
             )
 
         output_segs = []
-        vols, props = self._convert_sitk_to_nnunet(vols_sitk)
-        for i in range(len(vols_sitk)):
-            r = self._nnunet_predictor.predict_single_npy_array(
-                vols[i],
-                props[i],
-            )
+        for i, (v, p) in enumerate(self._convert_sitk_to_nnunet(vols_obb)):
+            r = self._nnunet_predictor.predict_single_npy_array(v, p)
+            del v, p
+
             r = sitk.GetImageFromArray(r)
-            r.CopyInformation(vols_sitk[i])
+            r.CopyInformation(vols_obb[i])
+
             if self.bone_type == "scapula":
                 Unaligner = armcrop.UnalignOBBSegmentation(
-                    vol_path,
+                    vol_input,
                     thin_regions={2: (2, 3)},
                     face_connectivity_regions=[2],
                     face_connectivity_repeats=2,
                 )
             elif self.bone_type == "humerus":
                 Unaligner = armcrop.UnalignOBBSegmentation(
-                    vol_path, thin_regions={2: (2, 3)}
+                    vol_input,
+                    thin_regions={2: (2, 3)},
                 )
 
             # perform the unalignment
             r_unalign = Unaligner(r)
+            del r
 
             if post_process:
                 # perform post processing on the unaligned segmentation
