@@ -76,27 +76,22 @@ class Net:
             iou_supress_threshold=0.4,
         )
 
-    def _convert_sitk_to_nnunet(self, vols_sitk: list):
+    def _convert_sitk_to_nnunet(self, vol_sitk: sitk.Image):
         # this needs some work
-        vols = []
-        props = []
-        for v in vols_sitk:
-            vols.append(np.expand_dims(sitk.GetArrayFromImage(v), 0).astype(np.float32))
-            print(v.GetSize())
-            props.append(
-                {
-                    "sitk_stuff": {
-                        # this saves the sitk geometry information. This part is NOT used by nnU-Net!
-                        "spacing": v.GetSpacing(),
-                        "origin": v.GetOrigin(),
-                        "direction": v.GetDirection(),
-                    },
-                    # the spacing is inverted with [::-1] because sitk returns the spacing in the wrong
-                    # Image arrays are returned x,y,z but spacing is returned z,y,x. Duh.
-                    "spacing": list(np.abs(v.GetSpacing())[::-1]),
-                }
-            )
-        return vols, props
+        arr = np.expand_dims(sitk.GetArrayFromImage(vol_sitk), 0).astype(np.float32)
+        prop = {
+            "sitk_stuff": {
+                # this saves the sitk geometry information. This part is NOT used by nnU-Net!
+                "spacing": vol_sitk.GetSpacing(),
+                "origin": vol_sitk.GetOrigin(),
+                "direction": vol_sitk.GetDirection(),
+            },
+            # the spacing is inverted with [::-1] because sitk returns the spacing in the wrong
+            # Image arrays are returned x,y,z but spacing is returned z,y,x. Duh.
+            "spacing": list(np.abs(vol_sitk.GetSpacing())[::-1]),
+        }
+
+        return arr, prop
 
     def _convert_nnunet_to_sitk(self, result_arr, vols_sitk):
         result_sitk = []
@@ -153,7 +148,8 @@ class Net:
             )
 
         output_segs = []
-        for i, (v, p) in enumerate(self._convert_sitk_to_nnunet(vols_obb)):
+        for vol_obb in vols_obb:
+            v, p = self._convert_sitk_to_nnunet(vol_obb)
             r = self._nnunet_predictor.predict_single_npy_array(v, p)
             del v, p
 
