@@ -5,6 +5,7 @@ import numpy as np
 import SimpleITK as sitk
 import armcrop
 from typing import List
+import gc
 
 # make nnunet stop spitting out warnings from environment variables the author declared
 os.environ["nnUNet_raw"] = "None"
@@ -24,14 +25,12 @@ class Net:
         self.bone_type = bone_type
         # self._save_obb_dir = save_obb_dir
         self._model_path = self._get_nnunet_model(bone_type)
-        self._nnunet_predictor = (
-            nnunetv2.inference.predict_from_raw_data.nnUNetPredictor(
-                tile_step_size=0.5,
-                use_gaussian=True,
-                use_mirroring=False,
-                verbose=False,
-                verbose_preprocessing=False,
-            )
+        self._nnunet_predictor = nnunetv2.inference.predict_from_raw_data.nnUNetPredictor(
+            tile_step_size=0.5,
+            use_gaussian=True,
+            use_mirroring=False,
+            verbose=False,
+            verbose_preprocessing=False,
         )
         if self.bone_type == "scapula":
             fold = (1,)
@@ -72,7 +71,7 @@ class Net:
         # of the bone than an accurate bounding box
         return armcrop.OBBCrop2Bone(
             vol_path,
-            confidence_threshold=0.3,
+            confidence_threshold=0.2,
             iou_supress_threshold=0.4,
         )
 
@@ -120,6 +119,7 @@ class Net:
         contour = sitk.BinaryContour(
             b_mask, fullyConnected=True, backgroundValue=0, foregroundValue=1
         )
+        del b_mask, cc
 
         # Get locations where contour=1 AND class of seg_stik = 3
         contour_on_class3 = sitk.Multiply(contour, sitk.Equal(seg_sitk, 3))
@@ -127,11 +127,11 @@ class Net:
         # Subtract contour from class 3 to make it class 2
         result = sitk.Subtract(seg_sitk, contour_on_class3)  # Turn class 3 to 2
 
+        del contour, contour_on_class3
+        gc.collect()
         return result
 
-    def predict(
-        self, vol_path: str | pathlib.Path, post_process=True
-    ) -> List[sitk.Image]:
+    def predict(self, vol_path: str | pathlib.Path, post_process=True) -> List[sitk.Image]:
 
         vol_input = sitk.ReadImage(str(vol_path))
         if self.bone_type == "scapula":
@@ -140,11 +140,15 @@ class Net:
                 xy_padding=10,
                 z_padding=20,
                 z_iou_interval=80,
-                z_length_min=80,
+                z_length_min=40,
             )
         elif self.bone_type == "humerus":
             vols_obb = self._obb(vol_input).humerus(
-                [0.5, 0.5, 0.5], xy_padding=10, z_padding=30
+                [0.5, 0.5, 0.5],
+                xy_padding=10,
+                z_padding=30,
+                z_iou_interval=80,
+                z_length_min=40,
             )
 
         output_segs = []
@@ -154,7 +158,7 @@ class Net:
             del v, p
 
             r = sitk.GetImageFromArray(r)
-            r.CopyInformation(vols_obb[i])
+            r.CopyInformation(vol_obb)
 
             if self.bone_type == "scapula":
                 Unaligner = armcrop.UnalignOBBSegmentation(
@@ -178,7 +182,8 @@ class Net:
                 r_unalign = self.post_process(r_unalign)
 
             output_segs.append(r_unalign)  # append the segmentation in og csys
-
+        del vol_input, vols_obb
+        gc.collect()
         return output_segs
 
 

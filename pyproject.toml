@@ -9,7 +9,7 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = ">=3.11"
-armcrop = ">=0.7.2"
+armcrop = ">=0.7.3"
 nnunetv2 = ">=2.5"
 huggingface-hub = ">=0.25.1"
 
