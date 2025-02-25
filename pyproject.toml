@@ -1,6 +1,6 @@
 [project]
 name = "armcortnet"
-version = "0.3.0"
+version = "0.3.1"
 description = "An automated deep learning pipeline for segmentation of the scapula, humerus, and their respective subregions in CT scans."
 authors = [
     {name = "gspangenberg",email = "gspangen@uwo.ca"}

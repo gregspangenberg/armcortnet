@@ -18,17 +18,17 @@ pip install armcortnet
 For faster oriented bounding box cropping you can replace onnxruntime with onnxruntime-gpu.
 
 ## Usage
-
+The following code demonstrates how to use the armcortnet package to segment the scapula or humerus from a CT volume.
 ```python
-from armcortnet import Net
+import armcortnet
 import SimpleITK as sitk
 
 # initialize the segmentation model
-model = Net(bone_type="scapula")  # or "humerus"
+model = armcortnet.Net(bone_type="scapula")  # or "humerus"
 
 # perform segmentation prediction on a CT volume
 pred_segmentations = model.predict(
-    vol_path="path/to/input/ct.nrrd",
+    vol_path="path/to/input/ct.nrrd"
 )
 # output is a list of SimpleITK images, one for each bone_type detected in the CT
 for i, pred_seg in enumerate(pred_segmentations):
@@ -36,6 +36,20 @@ for i, pred_seg in enumerate(pred_segmentations):
     sitk.WriteImage(pred_seg, f"scapula-{i}.seg.nrrd")
 
 ```
+A mesh of the predicted bone can be generated using the following code:
+```python
+# perform mesh prediction on a CT volume, returns list of vtkPolyData objects
+pred_meshes = model.predict_poly(
+    vol_path="path/to/input/ct.nrrd"
+)
+
+# iterate over each detected object
+for i, cort_trab_polys in enumerate(pred_meshes):
+    # iterate over the cortical and trabecular meshes
+    for j, poly in enumerate(cort_trab_polys):
+        armcortnet.write_polydata(p, f"scapula_{i}_{j}.ply")
+```
+
 
 ## Output Labels
 
@@ -44,6 +58,8 @@ The segmentation output contains the following labels:
 - 1: Other adjacent bones ("i.e clavicle, radius, ulna, etc.")
 - 2: Cortical region of bone of interest
 - 3: Trabecular region of bone of interest
+
+Note: label 1 is removed when post-processing is used
 
 ## Models
 Trained models are automatically downloaded from HuggingFace Hub (`gregspangenberg/armcortnet`) on first use.
