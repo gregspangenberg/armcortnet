@@ -3,9 +3,10 @@ import os
 import huggingface_hub
 import numpy as np
 import SimpleITK as sitk
+import SimpleITK.utilities.vtk
+import vtk
 import armcrop
 from typing import List
-import gc
 
 # make nnunet stop spitting out warnings from environment variables the author declared
 os.environ["nnUNet_raw"] = "None"
@@ -17,10 +18,14 @@ import nnunetv2.inference
 import nnunetv2.inference.predict_from_raw_data
 
 
-# fix memory issues
 class Net:
-    # def __init__(self, bone_type: str, save_obb_dir: str | None = None):
     def __init__(self, bone_type: str):
+        """
+        Initialize the ML model for inference. Downloads the model from huggingface hub. Placing this in inside a for loop will cause the model to be loaded into memory multiple times. This is not ideal.
+
+        Args:
+            bone_type: Type of bone to detect and segment. Must be either 'scapula' or 'humerus'
+        """
 
         self.bone_type = bone_type
         # self._save_obb_dir = save_obb_dir
@@ -42,6 +47,7 @@ class Net:
             use_folds=fold,
             checkpoint_name="checkpoint_best.pth",
         )
+        self._obb_seg_cache = []
 
     def _get_nnunet_model(self, bone_type) -> str:
         """
@@ -103,6 +109,8 @@ class Net:
         return result_sitk
 
     def post_process(self, seg_sitk: sitk.Image) -> sitk.Image:
+        """This makes the cortical watertight and deletes the other bones."""
+
         # Create binary mask of classes 2-4 which is the entire bone
         b_mask = sitk.BinaryThreshold(
             seg_sitk, lowerThreshold=2, upperThreshold=4, insideValue=1, outsideValue=0
@@ -111,80 +119,146 @@ class Net:
         cc = sitk.RelabelComponent(
             sitk.ConnectedComponent(b_mask),
             sortByObjectSize=True,
-            minimumObjectSize=100,
+            minimumObjectSize=1000,
         )
         b_mask = cc == 1
-
+        del cc
         # Get contour of the bone binary mask
         contour = sitk.BinaryContour(
             b_mask, fullyConnected=True, backgroundValue=0, foregroundValue=1
         )
-        del b_mask, cc
-
         # Get locations where contour=1 AND class of seg_stik = 3
         contour_on_class3 = sitk.Multiply(contour, sitk.Equal(seg_sitk, 3))
-
+        del contour
         # Subtract contour from class 3 to make it class 2
         result = sitk.Subtract(seg_sitk, contour_on_class3)  # Turn class 3 to 2
 
-        del contour, contour_on_class3
-        gc.collect()
+        # retain class 2 and class 3 only where overlapping b_mask
+        result = sitk.Multiply(result, b_mask)
+
         return result
 
-    def predict(self, vol_path: str | pathlib.Path, post_process=True) -> List[sitk.Image]:
+    def _predict_obb(self, vol_input: sitk.Image) -> List[sitk.Image]:
+        if self._obb_seg_cache != []:
+
+            if self.bone_type == "scapula":
+                vols_obb = self._obb(vol_input).scapula(
+                    [0.5, 0.5, 0.5],
+                    xy_padding=10,
+                    z_padding=50,
+                    z_iou_interval=80,
+                    z_length_min=40,
+                )
+            elif self.bone_type == "humerus":
+                vols_obb = self._obb(vol_input).humerus(
+                    [0.5, 0.5, 0.5],
+                    xy_padding=10,
+                    z_padding=30,
+                    z_iou_interval=80,
+                    z_length_min=40,
+                )
+
+            self._obb_seg_cache = []
+            for vol_obb in vols_obb:
+                v, p = self._convert_sitk_to_nnunet(vol_obb)
+                r = self._nnunet_predictor.predict_single_npy_array(v, p)
+                del v, p
+
+                # create a sitk image from the prediction
+                r = sitk.GetImageFromArray(r)
+                r.CopyInformation(vol_obb)
+
+                # post process the segmentation
+                r = self.post_process(r)
+                self._obb_seg_cache.append(r)
+
+        return self._obb_seg_cache
+
+    def predict(
+        self,
+        vol_path: str | pathlib.Path,
+    ) -> List[sitk.Image]:
+        # clear the obb cache
+        self._obb_seg_cache = []
 
         vol_input = sitk.ReadImage(str(vol_path))
         if self.bone_type == "scapula":
-            vols_obb = self._obb(vol_input).scapula(
-                [0.5, 0.5, 0.5],
-                xy_padding=10,
-                z_padding=20,
-                z_iou_interval=80,
-                z_length_min=40,
+            Unaligner = armcrop.UnalignOBBSegmentation(
+                vol_input,
+                thin_regions={2: (2, 3)},
+                face_connectivity_regions=[2],
+                face_connectivity_repeats=2,
             )
         elif self.bone_type == "humerus":
-            vols_obb = self._obb(vol_input).humerus(
-                [0.5, 0.5, 0.5],
-                xy_padding=10,
-                z_padding=30,
-                z_iou_interval=80,
-                z_length_min=40,
+            Unaligner = armcrop.UnalignOBBSegmentation(
+                vol_input,
+                thin_regions={2: (2, 3)},
             )
 
         output_segs = []
-        for vol_obb in vols_obb:
-            v, p = self._convert_sitk_to_nnunet(vol_obb)
-            r = self._nnunet_predictor.predict_single_npy_array(v, p)
-            del v, p
+        for r in self._predict_obb(vol_input):
+            # unalign the segmentation
+            r = Unaligner(r)
+            # post process the segmentation
+            r = self.post_process(r)
+            output_segs.append(r)
 
-            r = sitk.GetImageFromArray(r)
-            r.CopyInformation(vol_obb)
-
-            if self.bone_type == "scapula":
-                Unaligner = armcrop.UnalignOBBSegmentation(
-                    vol_input,
-                    thin_regions={2: (2, 3)},
-                    face_connectivity_regions=[2],
-                    face_connectivity_repeats=2,
-                )
-            elif self.bone_type == "humerus":
-                Unaligner = armcrop.UnalignOBBSegmentation(
-                    vol_input,
-                    thin_regions={2: (2, 3)},
-                )
-
-            # perform the unalignment
-            r_unalign = Unaligner(r)
-            del r
-
-            if post_process:
-                # perform post processing on the unaligned segmentation
-                r_unalign = self.post_process(r_unalign)
-
-            output_segs.append(r_unalign)  # append the segmentation in og csys
-        del vol_input, vols_obb
-        gc.collect()
         return output_segs
+
+    def predict_poly(
+        self,
+        vol_path: str | pathlib.Path,
+        smooth_iter=30,
+        smooth_passband=0.01,
+    ) -> List[List[vtk.vtkPolyData]]:
+        """Predicts the segmentation of the bone and returns a list of vtkPolyData objects.
+
+        Args:
+            vol_path: Path to the volume to segment
+
+        Returns:
+            List of vtkPolyData objects
+
+            The list is structured as follows:
+            [
+                [detected_bone1-cortical, detected_bone1-trabecular],
+                [detected_bone2-cortical, detected_bone2-trabecular],
+                ...
+            ]
+        """
+        vol_input = sitk.ReadImage(str(vol_path))
+        results = []
+        for r in self._predict_obb(vol_input):
+            polys = []
+            for label in [2, 3]:  # Iterate through labels 2 and 3
+                # the spacing here is always (0.5, 0.5, 0.5)
+                # which makes conversion parameters like smoothing consitent
+                r_vtk = SimpleITK.utilities.vtk.sitk2vtk(r)
+                # convert to polydata
+                flying_edges = vtk.vtkDiscreteFlyingEdges3D()
+                flying_edges.SetInputData(r_vtk)
+                # Generate contour for current label
+                if label == 2:
+                    # removes in the internal surface of the cortical bone
+                    flying_edges.GenerateValues(1, label, label + 1)
+                else:
+                    flying_edges.GenerateValues(1, label, label)
+                flying_edges.Update()
+                poly = flying_edges.GetOutput()
+
+                # apply windowed sinc filter
+                smoother = vtk.vtkWindowedSincPolyDataFilter()
+                smoother.SetInputData(poly)
+                # less smoothing
+                smoother.SetNumberOfIterations(smooth_iter)
+                smoother.SetPassBand(smooth_passband)
+                smoother.Update()  # Update smoother
+
+                polys.append(smoother.GetOutput())  # Append smoothed polydata
+
+            results.append(polys)  # Append list of polydata to results
+
+        return results
 
 
 if __name__ == "__main__":

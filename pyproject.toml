@@ -12,6 +12,8 @@ python = ">=3.11"
 armcrop = ">=0.7.3"
 nnunetv2 = ">=2.5"
 huggingface-hub = ">=0.25.1"
+vtk = ">=9.0" 
+simpleitkutilities = ">=0.3.0"
 
 [tool.poetry]
 packages = [{include = "armcortnet"}]
