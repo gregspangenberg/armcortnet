@@ -15,9 +15,6 @@ os.environ["nnUNet_raw"] = "None"
 os.environ["nnUNet_preprocessed"] = "None"
 os.environ["nnUNet_results"] = "None"
 
-# disable onnxruntime verbose logging
-os.environ["ONNXRUNTIME_LOG_LEVEL"] = "2"
-
 import nnunetv2
 import nnunetv2.inference
 import nnunetv2.inference.predict_from_raw_data
@@ -113,20 +110,39 @@ class Net:
 
         return result_sitk
 
-    def post_process(self, seg_sitk: sitk.Image) -> sitk.Image:
+    def post_process(self, seg_sitk: sitk.Image, obb=False) -> sitk.Image:
         """This makes the cortical watertight and deletes the other bones."""
 
         # Create binary mask of classes 2-4 which is the entire bone
         b_mask = sitk.BinaryThreshold(
             seg_sitk, lowerThreshold=2, upperThreshold=4, insideValue=1, outsideValue=0
         )
-        # get largest connected component
+        # get connected components and remove small components
         cc = sitk.RelabelComponent(
             sitk.ConnectedComponent(b_mask),
             sortByObjectSize=True,
-            minimumObjectSize=1000,
+            minimumObjectSize=5000,
         )
-        b_mask = cc == 1
+
+        if obb:
+            # keep the connected component closest to bone_centroid
+            cc_stats = sitk.LabelShapeStatisticsImageFilter()
+            cc_stats.Execute(cc)
+
+            # caculate distance for each connected component
+            dists = []
+            for label in cc_stats.GetLabels():
+                label_centroid = cc_stats.GetCentroid(label)
+                dist = np.linalg.norm(np.array(label_centroid) - np.array(seg_sitk.GetOrigin()))
+                dists.append(dist)
+
+            # keep the closest label
+            b_mask = cc == cc_stats.GetLabels()[np.argmin(dists)]
+
+        else:
+            # keep the largest connected component
+            b_mask = cc == 1
+
         del cc
         # Get contour of the bone binary mask
         contour = sitk.BinaryContour(
@@ -175,7 +191,7 @@ class Net:
             r.CopyInformation(vol_obb)
 
             # post process the segmentation
-            r = self.post_process(r)
+            r = self.post_process(r, obb=True)
             obb_segs.append(r)
 
         # update cache
