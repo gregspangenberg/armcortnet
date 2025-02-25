@@ -9,12 +9,14 @@ import armcrop
 from typing import List
 from functools import lru_cache
 
-from utils import write_polydata
 
 # make nnunet stop spitting out warnings from environment variables the author declared
 os.environ["nnUNet_raw"] = "None"
 os.environ["nnUNet_preprocessed"] = "None"
 os.environ["nnUNet_results"] = "None"
+
+# disable onnxruntime verbose logging
+os.environ["ONNXRUNTIME_LOG_LEVEL"] = "2"
 
 import nnunetv2
 import nnunetv2.inference
@@ -295,6 +297,8 @@ class Net:
 
 
 if __name__ == "__main__":
+    from utils import write_polydata
+
     model = Net("scapula")
     ct = "/mnt/slowdata/arthritic-clinical-half-arm/AAW/AAW.nrrd"
     scapula_segmentations = model.predict(ct)
