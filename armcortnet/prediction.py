@@ -7,6 +7,9 @@ import SimpleITK.utilities.vtk
 import vtk
 import armcrop
 from typing import List
+from functools import lru_cache
+
+from utils import write_polydata
 
 # make nnunet stop spitting out warnings from environment variables the author declared
 os.environ["nnUNet_raw"] = "None"
@@ -26,9 +29,11 @@ class Net:
         Args:
             bone_type: Type of bone to detect and segment. Must be either 'scapula' or 'humerus'
         """
+        # Initialize cache variables
+        self._cache_key = None
+        self._cache_result = None
 
         self.bone_type = bone_type
-        # self._save_obb_dir = save_obb_dir
         self._model_path = self._get_nnunet_model(bone_type)
         self._nnunet_predictor = nnunetv2.inference.predict_from_raw_data.nnUNetPredictor(
             tile_step_size=0.5,
@@ -41,13 +46,11 @@ class Net:
             fold = (1,)
         elif self.bone_type == "humerus":
             fold = (0,)
-
         self._nnunet_predictor.initialize_from_trained_model_folder(
             self._model_path,
             use_folds=fold,
             checkpoint_name="checkpoint_best.pth",
         )
-        self._obb_seg_cache = []
 
     def _get_nnunet_model(self, bone_type) -> str:
         """
@@ -138,48 +141,66 @@ class Net:
 
         return result
 
-    def _predict_obb(self, vol_input: sitk.Image) -> List[sitk.Image]:
-        if self._obb_seg_cache != []:
+    def _predict_obb(self, vol_path: str, vol_input: sitk.Image) -> List[sitk.Image]:
+        if self._cache_key == vol_path:
+            return self._cache_result
 
-            if self.bone_type == "scapula":
-                vols_obb = self._obb(vol_input).scapula(
-                    [0.5, 0.5, 0.5],
-                    xy_padding=10,
-                    z_padding=50,
-                    z_iou_interval=80,
-                    z_length_min=40,
-                )
-            elif self.bone_type == "humerus":
-                vols_obb = self._obb(vol_input).humerus(
-                    [0.5, 0.5, 0.5],
-                    xy_padding=10,
-                    z_padding=30,
-                    z_iou_interval=80,
-                    z_length_min=40,
-                )
+        if self.bone_type == "scapula":
+            vols_obb = self._obb(vol_input).scapula(
+                [0.5, 0.5, 0.5],
+                xy_padding=10,
+                z_padding=50,
+                z_iou_interval=80,
+                z_length_min=40,
+            )
+        elif self.bone_type == "humerus":
+            vols_obb = self._obb(vol_input).humerus(
+                [0.5, 0.5, 0.5],
+                xy_padding=10,
+                z_padding=30,
+                z_iou_interval=80,
+                z_length_min=40,
+            )
 
-            self._obb_seg_cache = []
-            for vol_obb in vols_obb:
-                v, p = self._convert_sitk_to_nnunet(vol_obb)
-                r = self._nnunet_predictor.predict_single_npy_array(v, p)
-                del v, p
+        obb_segs = []
+        for vol_obb in vols_obb:
+            v, p = self._convert_sitk_to_nnunet(vol_obb)
+            r = self._nnunet_predictor.predict_single_npy_array(v, p)
+            del v, p
 
-                # create a sitk image from the prediction
-                r = sitk.GetImageFromArray(r)
-                r.CopyInformation(vol_obb)
+            # create a sitk image from the prediction
+            r = sitk.GetImageFromArray(r)
+            r.CopyInformation(vol_obb)
 
-                # post process the segmentation
-                r = self.post_process(r)
-                self._obb_seg_cache.append(r)
+            # post process the segmentation
+            r = self.post_process(r)
+            obb_segs.append(r)
 
-        return self._obb_seg_cache
+        # update cache
+        self._cache_key = vol_path
+        self._cache_result = obb_segs
+
+        return obb_segs
 
     def predict(
         self,
         vol_path: str | pathlib.Path,
     ) -> List[sitk.Image]:
-        # clear the obb cache
-        self._obb_seg_cache = []
+        """Predicts the segmentation of the bone.
+
+        Args:
+            vol_path: Path to the volume to segment
+
+        Returns:
+            List of sitk.Image objects
+
+            The list is structured as follows:
+            [
+                detected_bone1,
+                detected_bone2,
+                ...
+            ]
+        """
 
         vol_input = sitk.ReadImage(str(vol_path))
         if self.bone_type == "scapula":
@@ -196,7 +217,7 @@ class Net:
             )
 
         output_segs = []
-        for r in self._predict_obb(vol_input):
+        for r in self._predict_obb(str(vol_path), vol_input):
             # unalign the segmentation
             r = Unaligner(r)
             # post process the segmentation
@@ -208,8 +229,8 @@ class Net:
     def predict_poly(
         self,
         vol_path: str | pathlib.Path,
-        smooth_iter=30,
-        smooth_passband=0.01,
+        smooth_iter=60,
+        smooth_passband=0.001,
     ) -> List[List[vtk.vtkPolyData]]:
         """Predicts the segmentation of the bone and returns a list of vtkPolyData objects.
 
@@ -226,9 +247,8 @@ class Net:
                 ...
             ]
         """
-        vol_input = sitk.ReadImage(str(vol_path))
         results = []
-        for r in self._predict_obb(vol_input):
+        for r in self._predict_obb(str(vol_path), sitk.ReadImage(str(vol_path))):
             polys = []
             for label in [2, 3]:  # Iterate through labels 2 and 3
                 # the spacing here is always (0.5, 0.5, 0.5)
@@ -252,6 +272,8 @@ class Net:
                 # less smoothing
                 smoother.SetNumberOfIterations(smooth_iter)
                 smoother.SetPassBand(smooth_passband)
+                smoother.FeatureEdgeSmoothingOn()
+                smoother.NonManifoldSmoothingOn()
                 smoother.Update()  # Update smoother
 
                 polys.append(smoother.GetOutput())  # Append smoothed polydata
@@ -262,9 +284,14 @@ class Net:
 
 
 if __name__ == "__main__":
-    scapula_segmentations = Net("scapula").predict(
-        "/mnt/slowdata/arthritic-clinical-half-arm/AAW/AAW.nrrd",
-    )
-    print(scapula_segmentations)
+    model = Net("scapula")
+    ct = "/mnt/slowdata/arthritic-clinical-half-arm/AAW/AAW.nrrd"
+    scapula_segmentations = model.predict(ct)
+
     for i, s in enumerate(scapula_segmentations):
         sitk.WriteImage(s, f"AAW_scapula_{i}.seg.nrrd", useCompression=True)
+
+    scapula_polydata = model.predict_poly(ct)
+    for i, s in enumerate(scapula_polydata):
+        for j, p in enumerate(s):
+            write_polydata(p, f"AAW_scapula_{i}_{j}.ply")
