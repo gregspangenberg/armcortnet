@@ -229,8 +229,8 @@ class Net:
     def predict_poly(
         self,
         vol_path: str | pathlib.Path,
-        smooth_iter=60,
-        smooth_passband=0.001,
+        smooth_iter=30,
+        smooth_passband=0.01,
     ) -> List[List[vtk.vtkPolyData]]:
         """Predicts the segmentation of the bone and returns a list of vtkPolyData objects.
 
@@ -266,17 +266,28 @@ class Net:
                 flying_edges.Update()
                 poly = flying_edges.GetOutput()
 
+                # decimate the polydata it is super dense
+                decimate = vtk.vtkQuadricDecimation()
+                decimate.SetInputData(poly)
+                decimate.SetTargetReduction(0.5)
+                decimate.VolumePreservationOn()
+                decimate.Update()
+                poly = decimate.GetOutput()
+
                 # apply windowed sinc filter
                 smoother = vtk.vtkWindowedSincPolyDataFilter()
                 smoother.SetInputData(poly)
                 # less smoothing
                 smoother.SetNumberOfIterations(smooth_iter)
                 smoother.SetPassBand(smooth_passband)
-                smoother.FeatureEdgeSmoothingOn()
+                smoother.BoundarySmoothingOff()
+                smoother.FeatureEdgeSmoothingOff()
                 smoother.NonManifoldSmoothingOn()
                 smoother.Update()  # Update smoother
 
-                polys.append(smoother.GetOutput())  # Append smoothed polydata
+                poly = smoother.GetOutput()
+
+                polys.append(poly)  # Append smoothed polydata
 
             results.append(polys)  # Append list of polydata to results
 

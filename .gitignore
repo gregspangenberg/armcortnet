@@ -1,7 +1,12 @@
 armcortnet/models/
-*.ipynb
-*.seg.nrrd
-*.pyc
 dist/
 outputs/
 *gs-inf.py
+
+*.ipynb
+*.seg.nrrd
+*.pyc
+*.stl
+*.ply
+*.vtk
+*.obj
