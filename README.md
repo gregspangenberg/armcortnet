@@ -18,7 +18,7 @@ pip install armcortnet
 For faster oriented bounding box cropping you can replace onnxruntime with onnxruntime-gpu.
 
 ## Usage
-The following code demonstrates how to use the armcortnet package to segment the scapula or humerus from a CT volume.
+To generate a segmentation of the humerus or scapula from a CT volume, use the following:
 ```python
 import armcortnet
 import SimpleITK as sitk
@@ -36,7 +36,7 @@ for i, pred_seg in enumerate(pred_segmentations):
     sitk.WriteImage(pred_seg, f"scapula-{i}.seg.nrrd")
 
 ```
-A mesh of the predicted bone can be generated using the following code:
+A mesh of the predicted bone can be generated using the following:
 ```python
 # perform mesh prediction on a CT volume, returns list of vtkPolyData objects
 pred_meshes = model.predict_poly(
