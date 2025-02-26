@@ -269,18 +269,22 @@ class Net:
         for r in self._predict_obb(str(vol_path), sitk.ReadImage(str(vol_path))):
             polys = []
             for label in [2, 3]:  # Iterate through labels 2 and 3
+
+                # removes in the internal surface of the cortical bone
+                if label == 2:
+                    _r = sitk.BinaryThreshold(
+                        r, lowerThreshold=2, upperThreshold=4, insideValue=2, outsideValue=0
+                    )
+                    r_vtk = SimpleITK.utilities.vtk.sitk2vtk(_r)
+                    del _r
+                else:
+                    r_vtk = SimpleITK.utilities.vtk.sitk2vtk(r)
+
                 # the spacing here is always (0.5, 0.5, 0.5)
                 # which makes conversion parameters like smoothing consitent
-                r_vtk = SimpleITK.utilities.vtk.sitk2vtk(r)
                 # convert to polydata
-                flying_edges = vtk.vtkDiscreteFlyingEdges3D()
                 # Generate contour for current label
-                if label == 2:
-                    # removes in the internal surface of the cortical bone
-                    r_vtk = sitk.BinaryThreshold(
-                        r_vtk, lowerThreshold=2, upperThreshold=4, insideValue=2, outsideValue=0
-                    )
-
+                flying_edges = vtk.vtkDiscreteFlyingEdges3D()
                 flying_edges.SetInputData(r_vtk)
                 flying_edges.GenerateValues(1, label, label)
                 flying_edges.Update()
