@@ -274,13 +274,15 @@ class Net:
                 r_vtk = SimpleITK.utilities.vtk.sitk2vtk(r)
                 # convert to polydata
                 flying_edges = vtk.vtkDiscreteFlyingEdges3D()
-                flying_edges.SetInputData(r_vtk)
                 # Generate contour for current label
                 if label == 2:
                     # removes in the internal surface of the cortical bone
-                    flying_edges.GenerateValues(1, label, label + 1)
-                else:
-                    flying_edges.GenerateValues(1, label, label)
+                    r_vtk = sitk.BinaryThreshold(
+                        r_vtk, lowerThreshold=2, upperThreshold=4, insideValue=2, outsideValue=0
+                    )
+
+                flying_edges.SetInputData(r_vtk)
+                flying_edges.GenerateValues(1, label, label)
                 flying_edges.Update()
                 poly = flying_edges.GetOutput()
 
