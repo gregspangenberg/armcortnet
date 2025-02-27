@@ -6,8 +6,8 @@ import SimpleITK as sitk
 import SimpleITK.utilities.vtk
 import vtk
 import armcrop
+import torch
 from typing import List
-from functools import lru_cache
 
 
 # make nnunet stop spitting out warnings from environment variables the author declared
@@ -34,13 +34,25 @@ class Net:
 
         self.bone_type = bone_type
         self._model_path = self._get_nnunet_model(bone_type)
-        self._nnunet_predictor = nnunetv2.inference.predict_from_raw_data.nnUNetPredictor(
-            tile_step_size=0.5,
-            use_gaussian=True,
-            use_mirroring=False,
-            verbose=False,
-            verbose_preprocessing=False,
-        )
+
+        if torch.cuda.is_available():
+            self._nnunet_predictor = nnunetv2.inference.predict_from_raw_data.nnUNetPredictor(
+                tile_step_size=0.5,
+                use_gaussian=True,
+                use_mirroring=False,
+                verbose=False,
+                verbose_preprocessing=False,
+            )
+        else:
+            self._nnunet_predictor = nnunetv2.inference.predict_from_raw_data.nnUNetPredictor(
+                tile_step_size=0.5,
+                use_gaussian=True,
+                use_mirroring=False,
+                verbose=False,
+                verbose_preprocessing=False,
+                device=torch.device("cpu"),
+                perform_everything_on_device=False,
+            )
         if self.bone_type == "scapula":
             fold = (1,)
         elif self.bone_type == "humerus":
