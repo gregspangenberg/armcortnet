@@ -139,17 +139,33 @@ class Net:
         if obb:
             # keep the connected component closest to bone_centroid
             cc_stats = sitk.LabelShapeStatisticsImageFilter()
+            cc_stats.ComputeOrientedBoundingBoxOn()
             cc_stats.Execute(cc)
 
-            # caculate distance for each connected component
-            dists = []
-            for label in cc_stats.GetLabels():
-                label_centroid = cc_stats.GetCentroid(label)
-                dist = np.linalg.norm(np.array(label_centroid) - np.array(seg_sitk.GetOrigin()))
-                dists.append(dist)
+            # if more than 1 object
+            if len(cc_stats.GetLabels()) > 1:
+                # keep the connected component closest to the origin that matches the obb size
+                dists = []
+                for label in cc_stats.GetLabels():
+                    # filter out any components less than 75 % of the obb z-dim
+                    cc_size = cc_stats.GetOrientedBoundingBoxSize(label)
+                    obb_size = seg_sitk.GetSize()[2] - 2 * self.z_padding
+                    if cc_size[2] < 0.75 * obb_size:
+                        dists.append(np.inf)
 
-            # keep the closest label
-            b_mask = cc == cc_stats.GetLabels()[np.argmin(dists)]
+                    # if greater than 75% of the obb z-dim, calculate distance to origin
+                    else:
+                        label_centroid = cc_stats.GetCentroid(label)
+                        dist = np.linalg.norm(
+                            np.array(label_centroid) - np.array(seg_sitk.GetOrigin())
+                        )
+
+                        dists.append(dist)
+
+                # keep the closest label
+                b_mask = cc == cc_stats.GetLabels()[np.argmin(dists)]
+            else:
+                b_mask = cc == 1
 
         else:
             # keep the largest connected component
@@ -176,18 +192,20 @@ class Net:
             return self._cache_result
 
         if self.bone_type == "scapula":
+            self.z_padding = 50
             vols_obb = self._obb(vol_input).scapula(
                 [0.5, 0.5, 0.5],
                 xy_padding=10,
-                z_padding=50,
+                z_padding=self.z_padding,
                 z_iou_interval=80,
                 z_length_min=40,
             )
         elif self.bone_type == "humerus":
+            self.z_padding = 50
             vols_obb = self._obb(vol_input).humerus(
                 [0.5, 0.5, 0.5],
                 xy_padding=10,
-                z_padding=30,
+                z_padding=self.z_padding,
                 z_iou_interval=80,
                 z_length_min=40,
             )
@@ -333,8 +351,9 @@ class Net:
 if __name__ == "__main__":
     from utils import write_polydata
 
-    model = Net("scapula")
-    ct = "/mnt/slowdata/arthritic-clinical-half-arm/AAW/AAW.nrrd"
+    model = Net("humerus")
+    # ct = "/mnt/slowdata/ct/arthritic-clinical-half-arm/AAW/AAW.nrrd"
+    ct = "/mnt/slowdata/ct/japan/116811/116811.nrrd"
     scapula_segmentations = model.predict(ct)
 
     for i, s in enumerate(scapula_segmentations):
