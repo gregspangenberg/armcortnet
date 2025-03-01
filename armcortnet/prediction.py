@@ -150,20 +150,17 @@ class Net:
                     # filter out any components less than 75 % of the obb z-dim
                     cc_size = cc_stats.GetOrientedBoundingBoxSize(label)
                     obb_size = seg_sitk.GetSize()[2] - 2 * self.z_padding
-                    if cc_size[2] < 0.75 * obb_size:
-                        dists.append(np.inf)
-
-                    # if greater than 75% of the obb z-dim, calculate distance to origin
-                    else:
+                    if cc_size[2] > 0.75 * obb_size:
                         label_centroid = cc_stats.GetCentroid(label)
                         dist = np.linalg.norm(
                             np.array(label_centroid) - np.array(seg_sitk.GetOrigin())
                         )
-
                         dists.append(dist)
-
-                # keep the closest label
-                b_mask = cc == cc_stats.GetLabels()[np.argmin(dists)]
+                if len(dists) == 0:
+                    b_mask = cc == 1
+                else:
+                    # keep the closest label
+                    b_mask = cc == cc_stats.GetLabels()[np.argmin(dists)]
             else:
                 b_mask = cc == 1
 
@@ -310,6 +307,22 @@ class Net:
                 else:
                     r_vtk = SimpleITK.utilities.vtk.sitk2vtk(r)
 
+                # pad the image incase the contour is on the edge
+                pad = vtk.vtkImageConstantPad()
+                pad.SetInputData(r_vtk)
+                extents = r_vtk.GetExtent()
+                pad.SetOutputWholeExtent(
+                    extents[0] - 1,
+                    extents[1] + 1,
+                    extents[2] - 1,
+                    extents[3] + 1,
+                    extents[4] - 1,
+                    extents[5] + 1,
+                )
+                pad.SetConstant(0)
+                pad.Update()
+                r_vtk = pad.GetOutput()
+
                 # the spacing here is always (0.5, 0.5, 0.5)
                 # which makes conversion parameters like smoothing consitent
                 # convert to polydata
@@ -352,8 +365,7 @@ if __name__ == "__main__":
     from utils import write_polydata
 
     model = Net("humerus")
-    # ct = "/mnt/slowdata/ct/arthritic-clinical-half-arm/AAW/AAW.nrrd"
-    ct = "/mnt/slowdata/ct/japan/116811/116811.nrrd"
+    ct = "/mnt/slowdata/ct/arthritic-clinical-half-arm/AAW/AAW.nrrd"
     scapula_segmentations = model.predict(ct)
 
     for i, s in enumerate(scapula_segmentations):
