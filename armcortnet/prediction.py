@@ -147,10 +147,10 @@ class Net:
                 # keep the connected component closest to the origin that matches the obb size
                 dists = []
                 for label in cc_stats.GetLabels():
-                    # filter out any components less than 75 % of the obb z-dim
+                    # filter out any components less than 90 % of the obb z-dim
                     cc_size = cc_stats.GetOrientedBoundingBoxSize(label)
                     obb_size = seg_sitk.GetSize()[2] - 2 * self.z_padding
-                    if cc_size[2] > 0.75 * obb_size:
+                    if cc_size[2] > 0.90 * obb_size:
                         label_centroid = cc_stats.GetCentroid(label)
                         dist = np.linalg.norm(
                             np.array(label_centroid) - np.array(seg_sitk.GetOrigin())
@@ -189,7 +189,7 @@ class Net:
             return self._cache_result
 
         if self.bone_type == "scapula":
-            self.z_padding = 50
+            self.z_padding = 60
             vols_obb = self._obb(vol_input).scapula(
                 [0.5, 0.5, 0.5],
                 xy_padding=10,
@@ -198,7 +198,7 @@ class Net:
                 z_length_min=40,
             )
         elif self.bone_type == "humerus":
-            self.z_padding = 50
+            self.z_padding = 60
             vols_obb = self._obb(vol_input).humerus(
                 [0.5, 0.5, 0.5],
                 xy_padding=10,
