@@ -154,7 +154,6 @@ class Net:
                     ) - 2 * self.z_padding
                     if cc_size[2] > 0.60 * obb_size:
                         label_centroid = cc_stats.GetCentroid(label)
-                        print(detection_mean, label_centroid)
                         dist = np.linalg.norm(np.array(label_centroid) - np.array(detection_mean))
                         dists.append(dist)
                 # if no components are greater than 80% of the obb z-dim
