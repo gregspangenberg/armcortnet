@@ -10,3 +10,4 @@ outputs/
 *.ply
 *.vtk
 *.obj
+*.json

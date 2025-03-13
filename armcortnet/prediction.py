@@ -122,7 +122,7 @@ class Net:
 
         return result_sitk
 
-    def post_process(self, seg_sitk: sitk.Image, obb=False) -> sitk.Image:
+    def post_process(self, seg_sitk: sitk.Image, detection_mean=None) -> sitk.Image:
         """This makes the cortical watertight and deletes the other bones."""
 
         # Create binary mask of classes 2-4 which is the entire bone
@@ -136,7 +136,7 @@ class Net:
             minimumObjectSize=5000,
         )
 
-        if obb:
+        if detection_mean is not None:
             # keep the connected component closest to bone_centroid
             cc_stats = sitk.LabelShapeStatisticsImageFilter()
             cc_stats.ComputeOrientedBoundingBoxOn()
@@ -147,15 +147,17 @@ class Net:
                 # keep the connected component closest to the origin that matches the obb size
                 dists = []
                 for label in cc_stats.GetLabels():
-                    # filter out any components less than 90 % of the obb z-dim
+                    # filter out any components less than 80 % of the obb z-dim
                     cc_size = cc_stats.GetOrientedBoundingBoxSize(label)
-                    obb_size = seg_sitk.GetSize()[2] - 2 * self.z_padding
-                    if cc_size[2] > 0.90 * obb_size:
+                    obb_size = (
+                        seg_sitk.GetSize()[2] * seg_sitk.GetSpacing()[2]
+                    ) - 2 * self.z_padding
+                    if cc_size[2] > 0.60 * obb_size:
                         label_centroid = cc_stats.GetCentroid(label)
-                        dist = np.linalg.norm(
-                            np.array(label_centroid) - np.array(seg_sitk.GetOrigin())
-                        )
+                        print(detection_mean, label_centroid)
+                        dist = np.linalg.norm(np.array(label_centroid) - np.array(detection_mean))
                         dists.append(dist)
+                # if no components are greater than 80% of the obb z-dim
                 if len(dists) == 0:
                     b_mask = cc == 1
                 else:
@@ -188,9 +190,10 @@ class Net:
         if self._cache_key == vol_path:
             return self._cache_result
 
+        obb_cropper = self._obb(vol_input)
         if self.bone_type == "scapula":
             self.z_padding = 60
-            vols_obb = self._obb(vol_input).scapula(
+            vols_obb = obb_cropper.scapula(
                 [0.5, 0.5, 0.5],
                 xy_padding=10,
                 z_padding=self.z_padding,
@@ -199,16 +202,16 @@ class Net:
             )
         elif self.bone_type == "humerus":
             self.z_padding = 60
-            vols_obb = self._obb(vol_input).humerus(
+            vols_obb = obb_cropper.humerus(
                 [0.5, 0.5, 0.5],
                 xy_padding=10,
                 z_padding=self.z_padding,
                 z_iou_interval=80,
                 z_length_min=40,
             )
-
+        # get detection means
         obb_segs = []
-        for vol_obb in vols_obb:
+        for vol_obb, dmean in zip(vols_obb, obb_cropper.detection_means):
             v, p = self._convert_sitk_to_nnunet(vol_obb)
             r = self._nnunet_predictor.predict_single_npy_array(v, p)
             del v, p
@@ -218,7 +221,7 @@ class Net:
             r.CopyInformation(vol_obb)
 
             # post process the segmentation
-            r = self.post_process(r, obb=True)
+            r = self.post_process(r, dmean)
             obb_segs.append(r)
 
         # update cache
