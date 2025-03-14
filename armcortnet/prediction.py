@@ -152,7 +152,7 @@ class Net:
                     obb_size = (
                         seg_sitk.GetSize()[2] * seg_sitk.GetSpacing()[2]
                     ) - 2 * self.z_padding
-                    if cc_size[2] > 0.60 * obb_size:
+                    if cc_size[2] > 0.50 * obb_size:
                         label_centroid = cc_stats.GetCentroid(label)
                         dist = np.linalg.norm(np.array(label_centroid) - np.array(detection_mean))
                         dists.append(dist)

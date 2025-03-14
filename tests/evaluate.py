@@ -4,7 +4,7 @@ import pathlib
 import json
 
 # set type
-BONE_TYPE = "humerus"
+BONE_TYPE = "scapula"
 
 vols = pathlib.Path("/mnt/slowdata/ct")
 vols = [f for f in vols.rglob("*[!seg].nrrd")]
@@ -12,7 +12,7 @@ segs = pathlib.Path(f"/home/greg/projects/segment/stage2_net_training/database/s
 segs = [f for f in segs.rglob("*seg.nrrd")]
 
 # load the json
-with open(f"tests/splits_{BONE_TYPE}.json", "r") as f:
+with open(f"tests/seg/splits_{BONE_TYPE}.json", "r") as f:
     splits = json.load(f)
 
 vals = splits["val"]
