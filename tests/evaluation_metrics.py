@@ -5,7 +5,7 @@ import numpy as np
 import pathlib
 import SimpleITK as sitk
 import yaml
-
+from pprint import pprint
 import gc
 
 gc.enable()
@@ -13,7 +13,7 @@ torch.set_default_dtype(torch.float32)
 
 # select parameters
 BONE_TYPE = "scapula"
-SPLIT_TYPE = "val"
+SPLIT_TYPE = "test"
 
 
 def get_data(bone_type: str, split_type: str):
@@ -67,61 +67,70 @@ metrics = {
         reduction="none",
         percentile=99,
     ),
-    "assd": monai.metrics.SurfaceDistanceMetric(include_background=False, reduction="none"),
+    "asd": monai.metrics.SurfaceDistanceMetric(include_background=False, reduction="none"),
 }
+results_file = pathlib.Path(f"tests/seg/{BONE_TYPE}_{SPLIT_TYPE}_metrics.yaml")
+if not results_file.exists():
+    metrics_records = {name: {"all": [], "cort": [], "trab": []} for name in metrics.keys()}
+    for pred, gt in get_data(BONE_TYPE, SPLIT_TYPE):
 
-metrics_records = {name: {"all": [], "cort": [], "trab": []} for name in metrics.keys()}
-for pred, gt in get_data(BONE_TYPE, SPLIT_TYPE):
+        print("\n", pred.name, gt.name)
+        pred = sitk.ReadImage(str(pred), sitk.sitkUInt8)
+        gt = sitk.ReadImage(str(gt), sitk.sitkUInt8)
 
-    print("\n", pred.name, gt.name)
-    pred = sitk.ReadImage(str(pred), sitk.sitkUInt8)
-    gt = sitk.ReadImage(str(gt), sitk.sitkUInt8)
+        # discard further away bones
+        gt = closest_object(pred, gt)
+        spacing = gt.GetSpacing()
 
-    # discard further away bones
-    gt = closest_object(pred, gt)
-    spacing = gt.GetSpacing()
+        gt = torch.Tensor(sitk.GetArrayFromImage(gt).astype(np.uint8))
+        pred = torch.Tensor(sitk.GetArrayFromImage(pred).astype(np.uint8))
 
-    gt = torch.Tensor(sitk.GetArrayFromImage(gt).astype(np.uint8))
-    pred = torch.Tensor(sitk.GetArrayFromImage(pred).astype(np.uint8))
+        gc.collect()
 
-    gc.collect()
+        # one hot encode for each class
+        gt = gt.unsqueeze(0).unsqueeze(0)
+        pred = pred.unsqueeze(0).unsqueeze(0)
 
-    # one hot encode for each class
-    gt = gt.unsqueeze(0).unsqueeze(0)
-    pred = pred.unsqueeze(0).unsqueeze(0)
+        # get the masks
+        pall = ((pred == 2) | (pred == 3)).to(torch.bool)
+        gall = ((gt == 2) | (gt == 3)).to(torch.bool)
+        p2 = (pred == 2).to(torch.bool)
+        g2 = (gt == 2).to(torch.bool)
+        p3 = (pred == 3).to(torch.bool)
+        g3 = (gt == 3).to(torch.bool)
+        del gt, pred
+        gc.collect()
 
-    # get the masks
-    pall = ((pred == 2) | (pred == 3)).to(torch.bool)
-    gall = ((gt == 2) | (gt == 3)).to(torch.bool)
-    p2 = (pred == 2).to(torch.bool)
-    g2 = (gt == 2).to(torch.bool)
-    p3 = (pred == 3).to(torch.bool)
-    g3 = (gt == 3).to(torch.bool)
-    del gt, pred
-    gc.collect()
+        # Calculate each metric
+        for name, metric in metrics.items():
+            if name == "dice":
+                all_measure = float(metric(pall, gall))
+                cort_measure = float(metric(p2, g2))
+                trab_measure = float(metric(p3, g3))
+            else:
+                all_measure = float(metric(pall, gall, spacing=spacing))
+                cort_measure = float(metric(p2, g2, spacing=spacing))
+                trab_measure = float(metric(p3, g3, spacing=spacing))
+            # print(f"{name}: all={all_measure:.3f}, cort={cort_measure:.3f}, trab={trab_measure:.3f}")
+            print(f"{name}: all={all_measure}, cort={cort_measure}, trab={trab_measure:.3f}")
 
-    # Calculate each metric
-    for name, metric in metrics.items():
-        if name == "dice":
-            all_measure = float(metric(pall, gall))
-            cort_measure = float(metric(p2, g2))
-            trab_measure = float(metric(p3, g3))
-        else:
-            all_measure = float(metric(pall, gall, spacing=spacing))
-            cort_measure = float(metric(p2, g2, spacing=spacing))
-            trab_measure = float(metric(p3, g3, spacing=spacing))
-        # print(f"{name}: all={all_measure:.3f}, cort={cort_measure:.3f}, trab={trab_measure:.3f}")
-        print(f"{name}: all={all_measure}, cort={cort_measure}, trab={trab_measure:.3f}")
+            # break
+            metric.reset()
+            metrics_records[name]["all"].append(all_measure)
+            metrics_records[name]["cort"].append(cort_measure)
+            metrics_records[name]["trab"].append(trab_measure)
 
-        # break
-        metric.reset()
-        metrics_records[name]["all"].append(all_measure)
-        metrics_records[name]["cort"].append(cort_measure)
-        metrics_records[name]["trab"].append(trab_measure)
+    print(metrics_records)
 
+    # save metrics to yaml
+    with open(results_file, "w") as f:
+        yaml.dump(metrics_records, f)
 
-print(metrics_records)
+else:
+    with open(results_file, "r") as f:
+        metrics_records = yaml.load(f, Loader=yaml.FullLoader)
 
-# save metrics to yaml
-with open(f"tests/seg/{BONE_TYPE}_{SPLIT_TYPE}_metrics.yaml", "w") as f:
-    yaml.dump(metrics_records, f)
+    # calculate descriptive statistics
+    for name, metric in metrics_records.items():
+        for key, value in metric.items():
+            print(f"{name:<16} {key:<5}: mean={np.mean(value):>8.2f} {np.std(value):>8.2f}")

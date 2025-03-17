@@ -2,6 +2,7 @@ import armcortnet
 import SimpleITK as sitk
 import pathlib
 import json
+from tqdm import tqdm
 
 # set type
 BONE_TYPE = "scapula"
@@ -16,14 +17,14 @@ with open(f"tests/seg/splits_{BONE_TYPE}.json", "r") as f:
     splits = json.load(f)
 
 vals = splits["val"]
-vals = [s.replace("-1", "").replace("-0", "") for s in vals]
+vals = [s.replace("-1.", ".").replace("-0.", ".") for s in vals]
 tests_ext = splits["test"]
-tests_ext = [s.replace("-1", "").replace("-0", "") for s in tests_ext]
+tests_ext = [s.replace("-1.", ".").replace("-0.", ".") for s in tests_ext]
 
 
 # load model
 model = armcortnet.Net(BONE_TYPE)
-for seg in segs:
+for seg in tqdm(segs):
     # get volume
     vol = [v for v in vols if v.stem == seg.stem.split(".")[0]]
     if len(vol) == 0:
