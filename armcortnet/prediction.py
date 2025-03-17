@@ -191,19 +191,21 @@ class Net:
 
         obb_cropper = self._obb(vol_input)
         if self.bone_type == "scapula":
+            self.xy_padding = 60
             self.z_padding = 60
             vols_obb = obb_cropper.scapula(
                 [0.5, 0.5, 0.5],
-                xy_padding=10,
+                xy_padding=self.xy_padding,
                 z_padding=self.z_padding,
                 z_iou_interval=80,
-                z_length_min=40,
+                z_length_min=30,
             )
         elif self.bone_type == "humerus":
+            self.xy_padding = 10
             self.z_padding = 60
             vols_obb = obb_cropper.humerus(
                 [0.5, 0.5, 0.5],
-                xy_padding=10,
+                xy_padding=self.xy_padding,
                 z_padding=self.z_padding,
                 z_iou_interval=80,
                 z_length_min=40,
