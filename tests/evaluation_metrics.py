@@ -7,13 +7,15 @@ import SimpleITK as sitk
 import yaml
 from pprint import pprint
 import gc
+import scipy.stats
+
 
 gc.enable()
 torch.set_default_dtype(torch.float32)
 
 # select parameters
 BONE_TYPE = "scapula"
-SPLIT_TYPE = "test"
+SPLIT_TYPE = "val"
 
 
 def get_data(bone_type: str, split_type: str):
@@ -75,6 +77,7 @@ if not results_file.exists():
     for pred, gt in get_data(BONE_TYPE, SPLIT_TYPE):
 
         print("\n", pred.name, gt.name)
+
         pred = sitk.ReadImage(str(pred), sitk.sitkUInt8)
         gt = sitk.ReadImage(str(gt), sitk.sitkUInt8)
 
@@ -133,4 +136,6 @@ else:
     # calculate descriptive statistics
     for name, metric in metrics_records.items():
         for key, value in metric.items():
-            print(f"{name:<16} {key:<5}: mean={np.mean(value):>8.2f} {np.std(value):>8.2f}")
+            print(
+                f"{name:<16} {key:<5}: mean={np.median(value):>8.2f} {scipy.stats.iqr(value,axis=0):>8.2f}"
+            )

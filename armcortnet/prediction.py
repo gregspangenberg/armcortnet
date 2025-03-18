@@ -191,7 +191,7 @@ class Net:
 
         obb_cropper = self._obb(vol_input)
         if self.bone_type == "scapula":
-            self.xy_padding = 60
+            self.xy_padding = 20
             self.z_padding = 60
             vols_obb = obb_cropper.scapula(
                 [0.5, 0.5, 0.5],

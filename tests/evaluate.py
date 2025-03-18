@@ -17,7 +17,7 @@ with open(f"tests/seg/splits_{BONE_TYPE}.json", "r") as f:
     splits = json.load(f)
 
 vals = splits["val"]
-vals = [s.replace("-1.", ".").replace("-0.", ".") for s in vals]
+vals = [f"{s}.".replace("-1.", ".").replace("-0.", ".").replace(".", "") for s in vals]
 tests_ext = splits["test"]
 tests_ext = [s.replace("-1.", ".").replace("-0.", ".") for s in tests_ext]
 
