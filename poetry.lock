@@ -59,15 +59,15 @@ files = [
 
 [[package]]
 name = "armcrop"
-version = "0.7.3"
+version = "0.7.6"
 description = "A machine learning model that crops CT scans to a bone of interest in the arm"
 optional = false
 python-versions = ">=3.11"
 groups = ["main"]
 markers = "python_version >= \"3.12\" or python_version == \"3.11\""
 files = [
-    {file = "armcrop-0.7.3-py3-none-any.whl", hash = "sha256:43da626c85236d3c5795714df93758923218aa01edde458652d4c64ae9b8e130"},
-    {file = "armcrop-0.7.3.tar.gz", hash = "sha256:ee50be6569a1ea3d912f44cd5706854ba90cc1c8600e345499c8ad94a24683ba"},
+    {file = "armcrop-0.7.6-py3-none-any.whl", hash = "sha256:c60a55ce439b33b13143a86134719440c0fb31e0cb12c2a2243c0665e8ecb78a"},
+    {file = "armcrop-0.7.6.tar.gz", hash = "sha256:f1bfd6b9570394fe800dde99cca44f4e6b3c471809b6d49bb5b883cc1ef38425"},
 ]
 
 [package.dependencies]
@@ -2882,4 +2882,4 @@ PyYAML = "*"
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11"
-content-hash = "e896c9fa244bf71cfc6b5c07061c0ad194388507b26ffc4e286cef640ead5c26"
+content-hash = "b1641b987925faa154c4699d7167b41da9691b5c0b47d1ce9944ed49bfe805dd"

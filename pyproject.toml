@@ -1,16 +1,16 @@
 [project]
 name = "armcortnet"
-version = "0.4.4"
+version = "0.5.0"
 description = "An automated deep learning pipeline for segmentation of the scapula, humerus, and their respective subregions in CT scans."
 authors = [
     {name = "gspangenberg",email = "gspangen@uwo.ca"}
 ]
 readme = "README.md"
-license = {file = "LICENSE.md"}
+license = {file = "LICENSE"}
 
 [tool.poetry.dependencies]
 python = ">=3.11"
-armcrop = ">=0.7.6"
+armcrop = ">=0.8.0"
 nnunetv2 = ">=2.5"
 huggingface-hub = ">=0.25.1"
 vtk = ">=9.0" 
