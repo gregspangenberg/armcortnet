@@ -13,7 +13,7 @@ output_folder.mkdir(parents=True, exist_ok=True)
 # initialize the segmentation model
 model = armcortnet.Net(bone_type=BONE_TYPE)
 
-for file in input_folder.glob("*.nrrd"):
+for file in input_folder.glob("*[!seg].nrrd"):
 
     # perform mesh prediction on a CT volume, returns list of vtkPolyData objects
     pred_meshes = model.predict_poly(vol_path=file)
