@@ -19,6 +19,46 @@ import nnunetv2
 import nnunetv2.inference
 import nnunetv2.inference.predict_from_raw_data
 
+import cv2
+
+
+def _force_face_connectivity(arr_og: np.ndarray) -> np.ndarray:
+    """Force 4-point connectivity on each slice in each direction in the segmentation. This bridges small gaps in the segmentation that closing can't fix."""
+
+    def force_4_connectivity_2d(arr):
+        # Label components using 4-connectivity
+        _, labeled = cv2.connectedComponents(arr, connectivity=4)
+
+        # Find both left and right diagonal neighbors with different labels in one operation
+        upleft = np.roll(np.roll(labeled, -1, axis=0), -1, axis=1)  # Up-Left
+        upright = np.roll(np.roll(labeled, -1, axis=0), 1, axis=1)  # Up-Right
+        downleft = np.roll(np.roll(labeled, 1, axis=0), -1, axis=1)  # Down-Left
+        downright = np.roll(np.roll(labeled, 1, axis=0), 1, axis=1)  # Down-Right
+
+        diag_diff = (
+            ((labeled != upleft) & (labeled > 0) & (upleft > 0))
+            | ((labeled != upright) & (labeled > 0) & (upright > 0))
+            | ((labeled != downleft) & (labeled > 0) & (downleft > 0))
+            | ((labeled != downright) & (labeled > 0) & (downright > 0))
+        )
+
+        # Create orthogonal connections once
+        result = arr.copy()
+        result |= np.roll(diag_diff, 1, axis=1)  # Horizontal connection
+        result |= np.roll(diag_diff, 1, axis=0)  # Vertical connection
+
+        return result
+
+    arr = arr_og.copy().astype(np.uint8)
+    for z in range(arr.shape[0]):
+        arr[z, :, :] = force_4_connectivity_2d(arr[z, :, :])
+    for x in range(arr.shape[1]):
+        arr[:, x, :] = force_4_connectivity_2d(arr[:, x, :])
+    for x in range(arr.shape[2]):
+        arr[:, :, x] = force_4_connectivity_2d(arr[:, :, x])
+
+    return arr
+
 
 class Net:
     def __init__(self, bone_type: str):
@@ -84,17 +124,6 @@ class Net:
         model_path = pathlib.Path(model_path) / bone_type
         return str(model_path)
 
-    def _obb(self, vol_path):
-        # this could be spedup if armcrop was modified to load its model once not every time it
-        # recieves a  new volume
-        # we default to a lower confidence threshold as we care more about complete capture
-        # of the bone than an accurate bounding box
-        return armcrop.OBBCrop2Bone(
-            vol_path,
-            confidence_threshold=0.2,
-            iou_supress_threshold=0.4,
-        )
-
     def _convert_sitk_to_nnunet(self, vol_sitk: sitk.Image):
         # this needs some work
         arr = np.expand_dims(sitk.GetArrayFromImage(vol_sitk), 0).astype(np.float32)
@@ -122,7 +151,7 @@ class Net:
 
         return result_sitk
 
-    def post_process(self, seg_sitk: sitk.Image, detection_mean=None) -> sitk.Image:
+    def post_process(self, seg_sitk: sitk.Image, detection_means=None) -> sitk.Image:
         """This makes the cortical watertight and deletes the other bones."""
 
         # Create binary mask of classes 2-4 which is the entire bone
@@ -135,39 +164,26 @@ class Net:
             sortByObjectSize=True,
             minimumObjectSize=5000,
         )
+        if detection_means is not None:
+            # iterate over the connected components
+            shape_stats = sitk.LabelShapeStatisticsImageFilter()
+            shape_stats.Execute(cc)
+            lbl_dists = []
+            for lbl in shape_stats.GetLabels():
+                # get the centroid of the component
+                centroid = shape_stats.GetCentroid(lbl)
+                # get the closest detection mean to the centroid
+                dists = detection_means - centroid
+                dists = np.linalg.norm(dists, axis=1)
+                lbl_dists.append(np.min(dists))
 
-        if detection_mean is not None:
-            # keep the connected component closest to bone_centroid
-            cc_stats = sitk.LabelShapeStatisticsImageFilter()
-            cc_stats.ComputeOrientedBoundingBoxOn()
-            cc_stats.Execute(cc)
-
-            # if more than 1 object
-            if len(cc_stats.GetLabels()) > 1:
-                # keep the connected component closest to the origin that matches the obb size
-                dists = []
-                for label in cc_stats.GetLabels():
-                    # filter out any components less than 80 % of the obb z-dim
-                    cc_size = cc_stats.GetOrientedBoundingBoxSize(label)
-                    obb_size = (
-                        seg_sitk.GetSize()[2] * seg_sitk.GetSpacing()[2]
-                    ) - 2 * self.z_padding
-                    if cc_size[2] > 0.50 * obb_size:
-                        label_centroid = cc_stats.GetCentroid(label)
-                        dist = np.linalg.norm(np.array(label_centroid) - np.array(detection_mean))
-                        dists.append(dist)
-                # if no components are greater than 80% of the obb z-dim
-                if len(dists) == 0:
-                    b_mask = cc == 1
-                else:
-                    # keep the closest label
-                    b_mask = cc == cc_stats.GetLabels()[np.argmin(dists)]
-            else:
-                b_mask = cc == 1
+            # use the label with the smallest distance
+            closest_lbl = shape_stats.GetLabels()[np.argmin(lbl_dists)]
+            b_mask = sitk.Equal(cc, closest_lbl)
 
         else:
             # keep the largest connected component
-            b_mask = cc == 1
+            b_mask = sitk.Equal(cc, 1)
 
         del cc
         # Get contour of the bone binary mask
@@ -189,30 +205,26 @@ class Net:
         if self._cache_key == vol_path:
             return self._cache_result
 
-        obb_cropper = self._obb(vol_input)
-        if self.bone_type == "scapula":
-            self.xy_padding = 10
-            self.z_padding = 40
-            vols_obb = obb_cropper.scapula(
-                [0.5, 0.5, 0.5],
-                xy_padding=self.xy_padding,
-                z_padding=self.z_padding,
-                # z_iou_interval=80,
-                # z_length_min=30,
-            )
-        elif self.bone_type == "humerus":
-            self.xy_padding = 10
-            self.z_padding = 30
-            vols_obb = obb_cropper.humerus(
-                [0.5, 0.5, 0.5],
-                xy_padding=self.xy_padding,
-                z_padding=self.z_padding,
-                z_iou_interval=80,
-                z_length_min=40,
-            )
-        # get detection means
+        # get oriented bounding boxes from the volume
+        obb_cropper = armcrop.CropOriented(vol_input, detection_confidence=0.2, detection_iou=0.5)
+        vols_obb = obb_cropper.process(
+            bone=self.bone_type,
+            grouping_iou=0.3,
+            grouping_interval=50,
+            grouping_min_depth=50,
+            spacing=(0.5, 0.5, 0.5),
+        )
+        # # get detection means
+        centroider = armcrop.Centroids(vol_input, detection_confidence=0.2, detection_iou=0.5)
+        detection_means = centroider.process(
+            bone=self.bone_type,
+            grouping_iou=0.3,
+            grouping_interval=50,
+            grouping_min_depth=50,
+        )
+
         obb_segs = []
-        for vol_obb, dmean in zip(vols_obb, obb_cropper.detection_means):
+        for vol_obb, dmean in zip(vols_obb, detection_means):
             v, p = self._convert_sitk_to_nnunet(vol_obb)
             r = self._nnunet_predictor.predict_single_npy_array(v, p)
             del v, p
@@ -231,11 +243,56 @@ class Net:
 
         return obb_segs
 
+    def _predict_og(self, vol_path: str, vol_input: sitk.Image) -> List[sitk.Image]:
+        """Predicts the segmentation of the bone. Only supports Identity Direction Matrix volumes. i.e nii.gz are currently unsupported, due to flip along 2nd axis.
+
+        Args:
+            vol_path: Path to the volume to segment
+
+        Returns:
+            List of sitk.Image objects
+
+            The list is structured as follows:
+            [
+                detected_bone1,
+                detected_bone2,
+                ...
+            ]
+        """
+        if self._cache_key == vol_path:
+            return self._cache_result
+
+        # get detection means
+        centroider = armcrop.Centroids(vol_input, detection_confidence=0.2, detection_iou=0.5)
+        detection_means = centroider.process(
+            bone=self.bone_type,
+            grouping_iou=0.3,
+            grouping_interval=50,
+            grouping_min_depth=50,
+        )
+
+        v, p = self._convert_sitk_to_nnunet(vol_input)
+        r = self._nnunet_predictor.predict_single_npy_array(v, p)
+        r = sitk.GetImageFromArray(r)
+        r.CopyInformation(vol_input)
+        del v, p
+        segs = []
+        for dmean in detection_means:
+            # post process the segmentation
+            segs.append(self.post_process(r, dmean))
+
+        # update cache
+        self._cache_key = vol_path
+        self._cache_result = segs
+
+        return segs
+
     def predict(
         self,
         vol_path: str | pathlib.Path,
+        crop=True,
     ) -> List[sitk.Image]:
-        """Predicts the segmentation of the bone.
+        """Predicts the segmentation of the bone. Only supports Identity Direction Matrix volumes. i.e nii.gz are currently unsupported, due to flip along 2nd axis.
 
         Args:
             vol_path: Path to the volume to segment
@@ -252,34 +309,42 @@ class Net:
         """
 
         vol_input = sitk.ReadImage(str(vol_path))
-        if self.bone_type == "scapula":
-            Unaligner = armcrop.UnalignOBBSegmentation(
-                vol_input,
-                thin_regions={2: (2, 3)},
-                face_connectivity_regions=[2],
-                face_connectivity_repeats=2,
-            )
-        elif self.bone_type == "humerus":
-            Unaligner = armcrop.UnalignOBBSegmentation(
-                vol_input,
-                thin_regions={2: (2, 3)},
-            )
 
         output_segs = []
-        for r in self._predict_obb(str(vol_path), vol_input):
-            # unalign the segmentation
-            r = Unaligner(r)
-            # post process the segmentation
-            r = self.post_process(r)
-            output_segs.append(r)
+        if crop:
+            if self.bone_type == "scapula":
+                Unaligner = armcrop.UnalignOBBSegmentation(
+                    vol_input,
+                    thin_regions={2: (2, 3)},
+                    face_connectivity_regions=[2],
+                    face_connectivity_repeats=2,
+                )
+            elif self.bone_type == "humerus":
+                Unaligner = armcrop.UnalignOBBSegmentation(
+                    vol_input,
+                    thin_regions={2: (2, 3)},
+                )
+            for r in self._predict_obb(str(vol_path), vol_input):
+                # unalign the segmentation
+                r = Unaligner(r)
+                # post process the segmentation
+                r = self.post_process(r)
+                output_segs.append(r)
+        else:
+            for r in self._predict_og(str(vol_path), vol_input):
+                # post process the segmentation
+                r = self.post_process(r)
+                output_segs.append(r)
 
         return output_segs
 
     def predict_poly(
         self,
         vol_path: str | pathlib.Path,
+        crop=True,
         smooth_iter=30,
         smooth_passband=0.01,
+        closing=True,
     ) -> List[List[vtk.vtkPolyData]]:
         """Predicts the segmentation of the bone and returns a list of vtkPolyData objects.
 
@@ -296,18 +361,35 @@ class Net:
                 ...
             ]
         """
+        vol_input = sitk.ReadImage(str(vol_path))
+        if crop:
+            outputs = self._predict_obb(str(vol_path), vol_input)
+        else:
+            outputs = self._predict_og(str(vol_path), vol_input)
+
         results = []
-        for r in self._predict_obb(str(vol_path), sitk.ReadImage(str(vol_path))):
+        for r in outputs:
             polys = []
             for label in [2, 3]:  # Iterate through labels 2 and 3
 
                 # removes in the internal surface of the cortical bone
                 if label == 2:
                     _r = sitk.BinaryThreshold(
-                        r, lowerThreshold=2, upperThreshold=4, insideValue=2, outsideValue=0
+                        r, lowerThreshold=2, upperThreshold=4, insideValue=1, outsideValue=0
                     )
+                    if closing:
+                        for _ in range(3):
+                            arr = _force_face_connectivity(sitk.GetArrayFromImage(_r))
+                        _r = sitk.GetImageFromArray(arr)
+                        _r.CopyInformation(r)
+
+                        _r = sitk.BinaryClosingByReconstruction(
+                            _r, kernelRadius=((7, 7, 7)), fullyConnected=True
+                        )
+                        _r = sitk.Multiply(_r, label)
+
                     r_vtk = SimpleITK.utilities.vtk.sitk2vtk(_r)
-                    del _r
+                    # del _r
                 else:
                     r_vtk = SimpleITK.utilities.vtk.sitk2vtk(r)
 
@@ -368,14 +450,14 @@ class Net:
 if __name__ == "__main__":
     from utils import write_polydata
 
-    model = Net("humerus")
+    model = Net("scapula")
     ct = "/mnt/slowdata/ct/arthritic-clinical-half-arm/AAW/AAW.nrrd"
-    scapula_segmentations = model.predict(ct)
+    # scapula_segmentations = model.predict(ct)
 
-    for i, s in enumerate(scapula_segmentations):
-        sitk.WriteImage(s, f"AAW_scapula_{i}.seg.nrrd", useCompression=True)
+    # for i, s in enumerate(scapula_segmentations):
+    #     sitk.WriteImage(s, f"AAW_scapula_{i}.seg.nrrd", useCompression=True)
 
-    scapula_polydata = model.predict_poly(ct)
+    scapula_polydata = model.predict_poly(ct, crop=False)
     for i, s in enumerate(scapula_polydata):
         for j, p in enumerate(s):
             write_polydata(p, f"AAW_scapula_{i}_{j}.ply")

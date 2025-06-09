@@ -10,7 +10,7 @@ license = {file = "LICENSE"}
 
 [tool.poetry.dependencies]
 python = ">=3.11"
-armcrop = ">=0.8.0"
+armcrop = ">=1.2.0"
 nnunetv2 = ">=2.5"
 huggingface-hub = ">=0.25.1"
 vtk = ">=9.0" 
