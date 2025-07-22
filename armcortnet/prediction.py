@@ -155,9 +155,7 @@ class Net:
         """This makes the cortical watertight and deletes the other bones."""
 
         # Create binary mask of classes 2-4 which is the entire bone
-        b_mask = sitk.BinaryThreshold(
-            seg_sitk, lowerThreshold=2, upperThreshold=4, insideValue=1, outsideValue=0
-        )
+        b_mask = sitk.BinaryThreshold(seg_sitk, lowerThreshold=2, upperThreshold=4, insideValue=1, outsideValue=0)
         # get connected components and remove small components
         cc = sitk.RelabelComponent(
             sitk.ConnectedComponent(b_mask),
@@ -187,9 +185,7 @@ class Net:
 
         del cc
         # Get contour of the bone binary mask
-        contour = sitk.BinaryContour(
-            b_mask, fullyConnected=True, backgroundValue=0, foregroundValue=1
-        )
+        contour = sitk.BinaryContour(b_mask, fullyConnected=True, backgroundValue=0, foregroundValue=1)
         # Get locations where contour=1 AND class of seg_stik = 3
         contour_on_class3 = sitk.Multiply(contour, sitk.Equal(seg_sitk, 3))
         del contour
@@ -271,10 +267,22 @@ class Net:
             grouping_min_depth=50,
         )
 
-        v, p = self._convert_sitk_to_nnunet(vol_input)
+        # resample filter to resample the image to 0.5mm isotropic spacing
+        vol_res = sitk.Resample(
+            vol_input,
+            [int(round(s / 0.5)) for s in vol_input.GetSize()],
+            sitk.Transform(),
+            sitk.sitkBSpline,
+            vol_input.GetOrigin(),
+            vol_input.GetSpacing(),
+            vol_input.GetDirection(),
+            -1023,
+        )
+
+        v, p = self._convert_sitk_to_nnunet(vol_res)
         r = self._nnunet_predictor.predict_single_npy_array(v, p)
         r = sitk.GetImageFromArray(r)
-        r.CopyInformation(vol_input)
+        r.CopyInformation(vol_res)
         del v, p
         segs = []
         for dmean in detection_means:
@@ -290,7 +298,7 @@ class Net:
     def predict(
         self,
         vol_path: str | pathlib.Path,
-        crop=True,
+        crop=False,
     ) -> List[sitk.Image]:
         """Predicts the segmentation of the bone. Only supports Identity Direction Matrix volumes. i.e nii.gz are currently unsupported, due to flip along 2nd axis.
 
@@ -341,7 +349,7 @@ class Net:
     def predict_poly(
         self,
         vol_path: str | pathlib.Path,
-        crop=True,
+        crop=False,
         smooth_iter=30,
         smooth_passband=0.01,
         closing=True,
@@ -374,18 +382,14 @@ class Net:
 
                 # removes in the internal surface of the cortical bone
                 if label == 2:
-                    _r = sitk.BinaryThreshold(
-                        r, lowerThreshold=2, upperThreshold=4, insideValue=1, outsideValue=0
-                    )
+                    _r = sitk.BinaryThreshold(r, lowerThreshold=2, upperThreshold=4, insideValue=1, outsideValue=0)
                     if closing:
                         for _ in range(3):
                             arr = _force_face_connectivity(sitk.GetArrayFromImage(_r))
                         _r = sitk.GetImageFromArray(arr)
                         _r.CopyInformation(r)
 
-                        _r = sitk.BinaryClosingByReconstruction(
-                            _r, kernelRadius=((7, 7, 7)), fullyConnected=True
-                        )
+                        _r = sitk.BinaryClosingByReconstruction(_r, kernelRadius=((7, 7, 7)), fullyConnected=True)
                         _r = sitk.Multiply(_r, label)
 
                     r_vtk = SimpleITK.utilities.vtk.sitk2vtk(_r)
