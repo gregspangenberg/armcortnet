@@ -1,25 +1,24 @@
-import pathlib
 import os
+import pathlib
+from typing import List
+
+import armcrop
 import huggingface_hub
 import numpy as np
 import SimpleITK as sitk
 import SimpleITK.utilities.vtk
-import vtk
-import armcrop
 import torch
-from typing import List
-
+import vtk
 
 # make nnunet stop spitting out warnings from environment variables the author declared
 os.environ["nnUNet_raw"] = "None"
 os.environ["nnUNet_preprocessed"] = "None"
 os.environ["nnUNet_results"] = "None"
 
+import cv2
 import nnunetv2
 import nnunetv2.inference
 import nnunetv2.inference.predict_from_raw_data
-
-import cv2
 
 
 def _force_face_connectivity(arr_og: np.ndarray) -> np.ndarray:
@@ -283,7 +282,7 @@ class Net:
         r = self._nnunet_predictor.predict_single_npy_array(v, p)
         r = sitk.GetImageFromArray(r)
         r.CopyInformation(vol_res)
-        del v, p
+        del v, p, vol_res
         segs = []
         for dmean in detection_means:
             # post process the segmentation
