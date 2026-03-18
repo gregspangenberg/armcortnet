@@ -1,5 +1,7 @@
+import gc
 import os
 import pathlib
+import tempfile
 from typing import List
 
 import armcrop
@@ -19,6 +21,17 @@ import cv2
 import nnunetv2
 import nnunetv2.inference
 import nnunetv2.inference.predict_from_raw_data
+from nnunetv2.utilities.helpers import empty_cache
+
+
+def _clear_memory(device=None):
+    """Aggressively clear memory after predictions."""
+    gc.collect()
+    if device is not None:
+        empty_cache(device)
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
 
 
 def _force_face_connectivity(arr_og: np.ndarray) -> np.ndarray:
@@ -60,16 +73,19 @@ def _force_face_connectivity(arr_og: np.ndarray) -> np.ndarray:
 
 
 class Net:
-    def __init__(self, bone_type: str):
+    def __init__(self, bone_type: str, enable_cache: bool = True):
         """
         Initialize the ML model for inference. Downloads the model from huggingface hub. Placing this in inside a for loop will cause the model to be loaded into memory multiple times. This is not ideal.
 
         Args:
             bone_type: Type of bone to detect and segment. Must be either 'scapula' or 'humerus'
+            enable_cache: Whether to cache prediction results. Disable to save RAM when
+                         processing many volumes. Default is True.
         """
         # Initialize cache variables
         self._cache_key = None
         self._cache_result = None
+        self._caching_enabled = enable_cache
 
         self.bone_type = bone_type
         self._model_path = self._get_nnunet_model(bone_type)
@@ -101,6 +117,12 @@ class Net:
             use_folds=fold,
             checkpoint_name="checkpoint_best.pth",
         )
+
+    def clear_cache(self):
+        """Clear prediction cache and free memory. Call this between processing large volumes."""
+        self._cache_key = None
+        self._cache_result = None
+        _clear_memory(self._nnunet_predictor.device)
 
     def _get_nnunet_model(self, bone_type) -> str:
         """
@@ -196,8 +218,8 @@ class Net:
 
         return result
 
-    def _predict_obb(self, vol_path: str, vol_input: sitk.Image) -> List[sitk.Image]:
-        if self._cache_key == vol_path:
+    def _predict_obb(self, vol_path: str, vol_input: sitk.Image, low_memory: bool = False) -> List[sitk.Image]:
+        if self._caching_enabled and self._cache_key == vol_path:
             return self._cache_result
 
         # get oriented bounding boxes from the volume
@@ -220,29 +242,66 @@ class Net:
 
         obb_segs = []
         for vol_obb, dmean in zip(vols_obb, detection_means):
-            v, p = self._convert_sitk_to_nnunet(vol_obb)
-            r = self._nnunet_predictor.predict_single_npy_array(v, p)
-            del v, p
-
-            # create a sitk image from the prediction
-            r = sitk.GetImageFromArray(r)
-            r.CopyInformation(vol_obb)
+            if low_memory:
+                r = self._predict_via_file(vol_obb)
+            else:
+                v, p = self._convert_sitk_to_nnunet(vol_obb)
+                r = self._nnunet_predictor.predict_single_npy_array(v, p)
+                del v, p
+                r = sitk.GetImageFromArray(r)
+                r.CopyInformation(vol_obb)
 
             # post process the segmentation
             r = self.post_process(r, dmean)
             obb_segs.append(r)
 
-        # update cache
-        self._cache_key = vol_path
-        self._cache_result = obb_segs
+            # Clear memory after each prediction in low_memory mode
+            if low_memory:
+                _clear_memory(self._nnunet_predictor.device)
+
+        # update cache (only if caching is enabled)
+        if self._caching_enabled:
+            self._cache_key = vol_path
+            self._cache_result = obb_segs
 
         return obb_segs
 
-    def _predict_og(self, vol_path: str, vol_input: sitk.Image) -> List[sitk.Image]:
+    def _predict_via_file(self, vol_sitk: sitk.Image) -> sitk.Image:
+        """Memory-efficient prediction using file-based I/O instead of array.
+
+        This avoids RAM duplication by letting nnUNet handle file loading internally
+        with its optimized preprocessing pipeline. Uses sequential (no multiprocessing)
+        to avoid spawn context issues.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = pathlib.Path(tmpdir)
+            input_file = tmpdir / "input_0000.nrrd"
+            output_file = tmpdir / "input.nrrd"
+
+            # Write input to temp file
+            sitk.WriteImage(vol_sitk, str(input_file), useCompression=False)
+
+            # Use sequential file-based prediction (no multiprocessing, more memory efficient)
+            self._nnunet_predictor.predict_from_files_sequential(
+                [[str(input_file)]],
+                str(tmpdir),
+                save_probabilities=False,
+                overwrite=True,
+            )
+
+            # Read result
+            result = sitk.ReadImage(str(output_file))
+            result.CopyInformation(vol_sitk)
+
+        _clear_memory(self._nnunet_predictor.device)
+        return result
+
+    def _predict_og(self, vol_path: str, vol_input: sitk.Image, low_memory: bool = False) -> List[sitk.Image]:
         """Predicts the segmentation of the bone. Only supports Identity Direction Matrix volumes. i.e nii.gz are currently unsupported, due to flip along 2nd axis.
 
         Args:
             vol_path: Path to the volume to segment
+            low_memory: Use file-based prediction to reduce RAM usage
 
         Returns:
             List of sitk.Image objects
@@ -254,7 +313,7 @@ class Net:
                 ...
             ]
         """
-        if self._cache_key == vol_path:
+        if self._caching_enabled and self._cache_key == vol_path:
             return self._cache_result
 
         # get detection means
@@ -266,43 +325,165 @@ class Net:
             grouping_min_depth=50,
         )
 
-        # resample filter to resample the image to 0.5mm isotropic spacing
-        vol_res = sitk.Resample(
-            vol_input,
-            [int(round(s / 0.5)) for s in vol_input.GetSize()],
-            sitk.Transform(),
-            sitk.sitkBSpline,
-            vol_input.GetOrigin(),
-            vol_input.GetSpacing(),
-            vol_input.GetDirection(),
-            -1023,
-        )
-
-        v, p = self._convert_sitk_to_nnunet(vol_res)
-        r = self._nnunet_predictor.predict_single_npy_array(v, p)
-        r = sitk.GetImageFromArray(r)
-        r.CopyInformation(vol_res)
-        del v, p, vol_res
         segs = []
         for dmean in detection_means:
+            # Crop around centroid, resample crop, predict, then place back
+            crop_seg = self._predict_cropped_region(vol_input, dmean, low_memory=low_memory)
             # post process the segmentation
-            segs.append(self.post_process(r, dmean))
+            crop_seg = self.post_process(crop_seg, dmean)
+            segs.append(crop_seg)
 
-        # update cache
-        self._cache_key = vol_path
-        self._cache_result = segs
+            if low_memory:
+                _clear_memory(self._nnunet_predictor.device)
+
+        # update cache (only if caching is enabled)
+        if self._caching_enabled:
+            self._cache_key = vol_path
+            self._cache_result = segs
 
         return segs
+
+    def _predict_cropped_region(
+        self,
+        vol_input: sitk.Image,
+        detection_centroids: np.ndarray,
+        low_memory: bool = False,
+        padding_mm: float = 50.0,
+        min_size_mm: tuple = (200, 200, 200),
+    ) -> sitk.Image:
+        """Crop around a centroid, resample to 0.5mm, predict, and place result back.
+
+        Args:
+            vol_input: Full input volume
+            detection_centroids: Array of physical coordinates (N, 3) for detection centroids
+            low_memory: Use file-based prediction
+            padding_mm: Padding around centroid in mm
+            min_size_mm: Minimum crop size in mm (x, y, z)
+
+        Returns:
+            Segmentation in original volume space (same size as vol_input)
+        """
+        spacing = np.array(vol_input.GetSpacing())
+        size = np.array(vol_input.GetSize())
+        origin = np.array(vol_input.GetOrigin())
+
+        # Get center of all detection centroids for this bone
+        detection_centroids = np.atleast_2d(detection_centroids)
+        centroid = np.mean(detection_centroids, axis=0)
+
+        # Convert centroid from physical to index coordinates
+        centroid_idx = np.array(vol_input.TransformPhysicalPointToIndex(centroid.tolist()))
+
+        # Calculate padding in voxels
+        padding_vox = (padding_mm / spacing).astype(int)
+
+        # Calculate minimum size in voxels
+        min_size_vox = (np.array(min_size_mm) / spacing).astype(int)
+
+        # Calculate crop region: start from centroid, extend by padding or min_size/2
+        half_size = np.maximum(padding_vox, min_size_vox // 2)
+
+        crop_start = centroid_idx - half_size
+        crop_end = centroid_idx + half_size
+
+        # Constrain to image bounds
+        crop_start = np.maximum(crop_start, 0)
+        crop_end = np.minimum(crop_end, size)
+        crop_size = crop_end - crop_start
+
+        # Ensure minimum size (expand if constrained on one side)
+        for i in range(3):
+            if crop_size[i] < min_size_vox[i]:
+                deficit = min_size_vox[i] - crop_size[i]
+                # Try to expand on the side with room
+                if crop_start[i] > 0:
+                    expand = min(deficit, crop_start[i])
+                    crop_start[i] -= expand
+                    deficit -= expand
+                if deficit > 0 and crop_end[i] < size[i]:
+                    expand = min(deficit, size[i] - crop_end[i])
+                    crop_end[i] += expand
+                crop_size[i] = crop_end[i] - crop_start[i]
+
+        # Extract ROI
+        roi_filter = sitk.RegionOfInterestImageFilter()
+        roi_filter.SetIndex(crop_start.astype(int).tolist())
+        roi_filter.SetSize(crop_size.astype(int).tolist())
+        vol_crop = roi_filter.Execute(vol_input)
+
+        # Resample crop to 0.5mm isotropic
+        target_spacing = (0.5, 0.5, 0.5)
+        new_size = [int(round(s * sp / 0.5)) for s, sp in zip(vol_crop.GetSize(), vol_crop.GetSpacing())]
+        vol_res = sitk.Resample(
+            vol_crop,
+            new_size,
+            sitk.Transform(),
+            sitk.sitkBSpline,
+            vol_crop.GetOrigin(),
+            target_spacing,
+            vol_crop.GetDirection(),
+            -1023,
+        )
+        del vol_crop
+
+        # Run prediction on resampled crop
+        if low_memory:
+            seg_res = self._predict_via_file(vol_res)
+        else:
+            v, p = self._convert_sitk_to_nnunet(vol_res)
+            seg_res = self._nnunet_predictor.predict_single_npy_array(v, p)
+            del v, p
+            seg_res = sitk.GetImageFromArray(seg_res)
+            seg_res.CopyInformation(vol_res)
+
+        del vol_res
+
+        # Resample segmentation back to original crop spacing using nearest neighbor
+        crop_origin = origin + crop_start * spacing
+        seg_crop = sitk.Resample(
+            seg_res,
+            crop_size.astype(int).tolist(),
+            sitk.Transform(),
+            sitk.sitkNearestNeighbor,
+            crop_origin.tolist(),  # Physical origin of crop region
+            spacing.tolist(),
+            vol_input.GetDirection(),
+            0,
+        )
+        del seg_res
+
+        # Place segmentation back into full volume space
+        result = sitk.Image(size.astype(int).tolist(), sitk.sitkUInt8)
+        result.SetSpacing(spacing.tolist())
+        result.SetOrigin(origin.tolist())
+        result.SetDirection(vol_input.GetDirection())
+
+        # Paste the crop into the result
+        result = sitk.Paste(
+            result,
+            seg_crop,
+            seg_crop.GetSize(),
+            [0, 0, 0],
+            crop_start.astype(int).tolist(),
+        )
+        del seg_crop
+
+        return result
 
     def predict(
         self,
         vol_path: str | pathlib.Path,
-        crop=False,
+        crop=True,
+        low_memory=False,
     ) -> List[sitk.Image]:
         """Predicts the segmentation of the bone. Only supports Identity Direction Matrix volumes. i.e nii.gz are currently unsupported, due to flip along 2nd axis.
 
         Args:
             vol_path: Path to the volume to segment
+            crop: Use oriented bounding box cropping for prediction
+            low_memory: Use file-based prediction to reduce RAM usage.
+                       Trades some speed for significantly lower memory footprint.
+                       Recommended when processing large volumes or running out of RAM.
 
         Returns:
             List of sitk.Image objects
@@ -331,14 +512,14 @@ class Net:
                     vol_input,
                     thin_regions={2: (2, 3)},
                 )
-            for r in self._predict_obb(str(vol_path), vol_input):
+            for r in self._predict_obb(str(vol_path), vol_input, low_memory=low_memory):
                 # unalign the segmentation
                 r = Unaligner(r)
                 # post process the segmentation
                 r = self.post_process(r)
                 output_segs.append(r)
         else:
-            for r in self._predict_og(str(vol_path), vol_input):
+            for r in self._predict_og(str(vol_path), vol_input, low_memory=low_memory):
                 # post process the segmentation
                 r = self.post_process(r)
                 output_segs.append(r)
@@ -348,15 +529,22 @@ class Net:
     def predict_poly(
         self,
         vol_path: str | pathlib.Path,
-        crop=False,
+        crop=True,
         smooth_iter=30,
         smooth_passband=0.01,
         closing=True,
+        low_memory=False,
     ) -> List[List[vtk.vtkPolyData]]:
         """Predicts the segmentation of the bone and returns a list of vtkPolyData objects.
 
         Args:
             vol_path: Path to the volume to segment
+            crop: Use oriented bounding box cropping for prediction
+            smooth_iter: Number of smoothing iterations
+            smooth_passband: Passband for the windowed sinc filter
+            closing: Apply morphological closing to the cortical bone
+            low_memory: Use file-based prediction to reduce RAM usage.
+                       Trades some speed for significantly lower memory footprint.
 
         Returns:
             List of vtkPolyData objects
@@ -370,9 +558,9 @@ class Net:
         """
         vol_input = sitk.ReadImage(str(vol_path))
         if crop:
-            outputs = self._predict_obb(str(vol_path), vol_input)
+            outputs = self._predict_obb(str(vol_path), vol_input, low_memory=low_memory)
         else:
-            outputs = self._predict_og(str(vol_path), vol_input)
+            outputs = self._predict_og(str(vol_path), vol_input, low_memory=low_memory)
 
         results = []
         for r in outputs:
