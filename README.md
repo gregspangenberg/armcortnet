@@ -64,3 +64,15 @@ Note: label 1 is removed when post-processing is used
 ## Models
 Trained models are automatically downloaded from HuggingFace Hub (`gregspangenberg/armcortnet`) on first use.
 
+## How to Cite
+If you use armcortnet in your research, please cite the package:
+
+```bibtex
+@software{armcortnet,
+  author = {Spangenberg, Greg},
+  title = {armcortnet: Automatic segmentation of humerus and scapula from CT scans},
+  url = {https://pypi.org/project/armcortnet/},
+  year = {2025}
+}
+```
+
